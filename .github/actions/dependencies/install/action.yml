@@ -151,7 +151,7 @@ runs:
           ${{ inputs.ubuntu-qt5-build-dependencies }}
           ${{ inputs.ubuntu-package-dependencies }}
           ${{ matrix.compiler == 'LLVM' && 'clang' || 'g++ gcc' }}
-      if: (startsWith(matrix.image, 'ubuntu:') || startsWith(matrix.image, 'debian:')) && (matrix.image == 'ubuntu:22.04' || matrix.image == 'debian:11')
+      if: (startsWith(matrix.image, 'ubuntu:') || startsWith(matrix.image, 'debian:')) && matrix.image == 'ubuntu:22.04'
 
     - name: Install Dependencies (Ubuntu / Debian Qt6)
       uses: ./.github/actions/dependencies/install/apt-get
@@ -160,7 +160,7 @@ runs:
           ${{ inputs.ubuntu-qt6-build-dependencies }}
           ${{ inputs.ubuntu-package-dependencies }}
           ${{ matrix.compiler == 'LLVM' && 'clang' || 'g++ gcc' }}
-      if: (startsWith(matrix.image, 'ubuntu:') || startsWith(matrix.image, 'debian:')) && matrix.image != 'ubuntu:22.04' && matrix.image != 'debian:11'
+      if: (startsWith(matrix.image, 'ubuntu:') || startsWith(matrix.image, 'debian:')) && matrix.image != 'ubuntu:22.04'
 
     - name: Install Dependencies (Alpine)
       uses: ./.github/actions/dependencies/install/apk
