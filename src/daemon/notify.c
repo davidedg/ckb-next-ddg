@@ -6,33 +6,102 @@
 #include "profile.h"
 #include "command.h"
 
+#include <poll.h>
+
+// Lines that fit here are formatted on the stack. A line of up to PIPE_BUF bytes reaches a FIFO whole or not at all (POSIX
+// guarantees at least 512 bytes, the value on macOS), so it can never be cut or mixed with a line printed at the same time by
+// another thread; longer lines go on the heap.
+#define NPRINTF_STACK 512
+// A line longer than PIPE_BUF can be written in parts. Once a part is out, the rest waits for the reader at most this long, so
+// that what follows on the node does not end up glued to half a line
+#define NPRINTF_WAIT_MS 1000
+
+static void ndropped(const char* why){
+    // Only a few warnings, however many lines are lost (1, 2, 4, 8...)
+    static unsigned long drops;
+    unsigned long n = __atomic_add_fetch(&drops, 1, __ATOMIC_RELAXED);
+    if((n & (n - 1)) == 0)
+        ckb_warn("Notification node %s: %lu line(s) lost so far", why, n);
+}
+
+// Writes one formatted line to a notification node with as few write() calls as possible: one, unless the line is longer than
+// PIPE_BUF. The nodes are non-blocking; a line that finds the node full is dropped whole.
+static void nwrite(int fifo, const char* line, size_t len){
+    size_t done = 0;
+    int waited = 0;
+    while(done < len){
+        ssize_t res = write(fifo, line + done, len - done);
+        if(res > 0){
+            done += (size_t)res;
+            continue;
+        }
+        if(res < 0 && errno == EINTR)
+            continue;
+        if(res < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && done > 0 && waited < NPRINTF_WAIT_MS){
+            // Half a line is out: wait for the reader to make room for the rest
+            struct pollfd pfd = { .fd = fifo, .events = POLLOUT };
+            poll(&pfd, 1, 100);
+            waited += 100;
+            continue;
+        }
+        if(done > 0 && line[len - 1] == '\n'){
+            // End the half line, so at least the next one is read as it is
+            char nl = '\n';
+            if(write(fifo, &nl, 1) != 1){}
+        }
+        ndropped(done ? "too slow" : "full");
+        return;
+    }
+}
+
 void nprintf(usbdevice* kb, int nodenumber, usbmode* mode, const char* format, ...){
     if(!kb)
         return;
     usbprofile* profile = kb->profile;
+    if(nodenumber >= OUTFIFO_MAX)
+        return;
+    if(nodenumber >= 0 && !kb->outfifo[nodenumber])
+        return;
+
+    // Format the whole line, with its "mode <n> " prefix, once for every node
+    char stackbuf[NPRINTF_STACK];
+    char* line = stackbuf;
+    int prefix = 0;
+    if(mode)
+        prefix = snprintf(stackbuf, sizeof(stackbuf), "mode %d ", INDEX_OF(mode, profile->mode) + 1);
+    if(prefix < 0)
+        return;
     va_list va_args;
-    int fifo;
+    va_start(va_args, format);
+    int body = vsnprintf(stackbuf + prefix, sizeof(stackbuf) - (size_t)prefix, format, va_args);
+    va_end(va_args);
+    if(body < 0)
+        return;
+    size_t len = (size_t)prefix + (size_t)body;
+    if(len >= sizeof(stackbuf)){
+        line = malloc(len + 1);
+        if(!line){
+            ndropped("out of memory");
+            return;
+        }
+        memcpy(line, stackbuf, (size_t)prefix);
+        va_start(va_args, format);
+        vsnprintf(line + prefix, len + 1 - (size_t)prefix, format, va_args);
+        va_end(va_args);
+    }
+
     if(nodenumber >= 0){
         // If node number was given, print to that node (if open)
-        if((fifo = kb->outfifo[nodenumber] - 1) != -1){
-            va_start(va_args, format);
-                if(mode)
-                    dprintf(fifo, "mode %d ", INDEX_OF(mode, profile->mode) + 1);
-                vdprintf(fifo, format, va_args);
-            va_end(va_args);
-        }
-        return;
-    }
-    // Otherwise, print to all nodes
-    for(int i = 0; i < OUTFIFO_MAX; i++){
-        if((fifo = kb->outfifo[i] - 1) != -1){
-            va_start(va_args, format);
-                if(mode)
-                    dprintf(fifo, "mode %d ", INDEX_OF(mode, profile->mode) + 1);
-                vdprintf(fifo, format, va_args);
-            va_end(va_args);
+        nwrite(kb->outfifo[nodenumber] - 1, line, len);
+    } else {
+        // Otherwise, print to all nodes
+        for(int i = 0; i < OUTFIFO_MAX; i++){
+            if(kb->outfifo[i])
+                nwrite(kb->outfifo[i] - 1, line, len);
         }
     }
+    if(line != stackbuf)
+        free(line);
 }
 
 void nprintkey(usbdevice* kb, int nnumber, int keyindex, int down){
