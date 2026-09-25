@@ -125,7 +125,7 @@ private:
     /// \brief lastCmd is a cache-hack.
     /// Because the QFile ist opened in Kb, and we need it in the macro processing functions,
     /// we cache the value her in lastCmd.
-    QFile*                           lastCmd;
+    QFile*                           lastCmd = nullptr;   // (null until the first write: handleNotificationChannel() checks it)
 
     KeyMap _map;
     // Key -> action map (no entry = default action)
