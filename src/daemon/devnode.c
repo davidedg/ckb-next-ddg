@@ -493,10 +493,11 @@ int readline_fifo(int fd, readlines_ctx* ctx){
 
     // Find the last newline and terminate the string there
     char* last = memrchr(ctx->buf, '\n', ctx->leftover_bytes + ret);
-    ctx->next_start = last;
 
     // No newline found yet
     if(!last){
+        // Nothing to move on the next call: the partial line is already at the beginning
+        ctx->next_start = NULL;
         if((size_t)ret == max_read){
             ckb_warn("String too long (%dKB). Dropping...", MAX_BUFFER/1024);
             ctx->leftover_bytes = 0;
@@ -508,6 +509,9 @@ int readline_fifo(int fd, readlines_ctx* ctx){
 
     *last = '\0';
 
+    // The partial line after the newline starts one byte after it (not at the newline, now a NUL: moving from there
+    // would drop the last byte of the partial line and put a NUL in front of it, losing the next command)
+    ctx->next_start = last + 1;
     ctx->leftover_bytes = (ret + ctx->leftover_bytes) - (last - ctx->buf) - 1;
 
     return 1;
