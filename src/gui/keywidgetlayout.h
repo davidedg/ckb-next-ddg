@@ -16,6 +16,7 @@ public:
     }
     ~KeyWidgetLayout(){
         delete keyWidget;
+        delete controls;
     }
 
     QLayoutItem* itemAt(int i) const override {
