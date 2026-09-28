@@ -75,7 +75,7 @@ static int name_is_unique(const hwmon_chip* chips, size_t count, size_t index){
 
 static void discover_leaves(sensor_list* list, const hwmon_chip* chip, int unique){
     char chip_dir[512];
-    snprintf(chip_dir, sizeof(chip_dir), "%s/%s", hwmon_root(), chip->dirname);
+    snprintf(chip_dir, sizeof(chip_dir), "%s/%.63s", hwmon_root(), chip->dirname);
     DIR* d = opendir(chip_dir);
     if(!d)
         return;
@@ -107,7 +107,7 @@ static void discover_leaves(sensor_list* list, const hwmon_chip* chip, int uniqu
 
         char id[SENSOR_ID_MAX];
         const char* id_chip = unique ? chip->chip_name : chip->dirname;
-        snprintf(id, sizeof(id), "%s%s/%s", HWMON_PREFIX, id_chip, leaf);
+        snprintf(id, sizeof(id), "%s%.127s/%s", HWMON_PREFIX, id_chip, leaf);
 
         char label[SENSOR_LABEL_MAX];
         const char* unit = is_temp ? "C" : "RPM";
