@@ -4,8 +4,8 @@
 #include <QString>
 
 #ifdef USE_WAYLAND
-class wl_display;
-class wl_seat;
+struct wl_display;
+struct wl_seat;
 #include <QList>
 #endif
 
