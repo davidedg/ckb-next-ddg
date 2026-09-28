@@ -1244,7 +1244,7 @@ KDbusImageStruct KStatusNotifierItemPrivate::imageToStruct(const QImage &image)
     }
 
     // swap to network byte order if we are little endian
-    if (QSysInfo::ByteOrder == QSysInfo::LittleEndian) {
+    if (QSysInfo::ByteOrder == QSysInfo::LittleEndian && structIcon.data.size() > 0) {
         const QByteArray& ba = structIcon.data;
         const qsizetype count = (ba.size() + (sizeof(quint32) - 1)) / sizeof(quint32);
         quint32 *uintBuf = new quint32[count]();
