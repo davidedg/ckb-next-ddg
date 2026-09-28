@@ -32,6 +32,8 @@ private:
 
 class FloatingDelegate : public QStyledItemDelegate
 {
+public:
+    explicit FloatingDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
 protected:
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const;
 };

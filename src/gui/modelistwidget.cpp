@@ -48,7 +48,7 @@ void ModeListWidget::setDevice(Kb* dev){
     floatingView->setSelectionModel(selectionModel());
     floatingView->setSelectionBehavior(QAbstractItemView::SelectRows);
     floatingView->setSelectionMode(QAbstractItemView::SingleSelection);
-    floatingView->setItemDelegateForColumn(ModeListTableModel::COL_EVENT_ICON, new FloatingDelegate);
+    floatingView->setItemDelegateForColumn(ModeListTableModel::COL_EVENT_ICON, new FloatingDelegate(floatingView));
 
     floatingView->setShowGrid(false);
     floatingView->horizontalHeader()->hideSection(ModeListTableModel::COL_MODE_ICON);
