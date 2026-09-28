@@ -103,7 +103,7 @@ KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector
     if(!device->features.contains("fwupdate")){
         ui->fwUpdButton->hide();
         ui->fwUpdLabel->hide();
-        ui->fwUpdLayout->removeItem(ui->fwUpdLayout->itemAt(1));
+        delete ui->fwUpdLayout->takeAt(1);
     }
     // Remove unsupported pollrates
     // Block signals so that the pollrate doesn't change
