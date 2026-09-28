@@ -370,7 +370,7 @@ void KbPerf::dpiCycleDown(){
 }
 
 void KbPerf::getIndicator(indicator index, QColor& color1, QColor& color2, QColor& color3, bool& software_enable, i_hw& hardware_enable){
-    if(index < 0 || index >= I_COUNT)
+    if((int)index < 0 || (int)index >= I_COUNT)
         return;
     color1 = iColor[index][0];
     color2 = iColor[index][1];
@@ -385,7 +385,7 @@ void KbPerf::getIndicator(indicator index, QColor& color1, QColor& color2, QColo
 }
 
 void KbPerf::setIndicator(indicator index, const QColor& color1, const QColor& color2, const QColor& color3, bool software_enable, i_hw hardware_enable){
-    if(index < 0 || index >= I_COUNT)
+    if((int)index < 0 || (int)index >= I_COUNT)
         return;
     iColor[index][0] = color1;
     iColor[index][1] = color2;
