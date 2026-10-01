@@ -84,7 +84,7 @@ void KbLight::color(const QColor& newColor){
     int mapCount = _colorMap.count();
     QRgb* flat = _colorMap.colors();
     for(int i = 0; i < mapCount; i++)
-        flat[i] = mapCount;
+        flat[i] = newRgb;
 }
 
 int KbLight::shareDimming(){
