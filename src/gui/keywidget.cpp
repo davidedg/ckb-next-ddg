@@ -283,15 +283,16 @@ void KeyWidget::colorMap(const QColorMap& newColorMap){
 }
 
 void KeyWidget::displayColorMap(const ColorMap& newDisplayMap, const QSet<QString>& indicators, quint64 renderInterval){
-    if(!isVisible())
-        return;
+    // Kept while the widget is hidden too (another tab shown): a mode whose colours do not move sends no further frame, so
+    // dropping this one would leave the previous mode's colours on screen when the widget is shown again
     _displayColorMap = newDisplayMap;
     _indicators = indicators;
 #ifdef FPS_COUNTER
     if(renderInterval != std::numeric_limits<quint64>::max())
         kbLoopElapsed = renderInterval;
 #endif
-    update();
+    if(isVisible())
+        update();
 }
 
 void KeyWidget::bindMap(const BindMap& newBindMap){
