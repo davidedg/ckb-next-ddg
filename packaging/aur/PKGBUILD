@@ -6,7 +6,7 @@
 pkgname=ckb-next-ddg
 pkgver=0.6.2.ddg.5
 pkgrel=1
-pkgdesc="Corsair Keyboard and Mouse RGB Driver — ddg fork (device-scoped profile/mode CLI, WITH_ENV_VARS)"
+pkgdesc="Corsair Keyboard and Mouse RGB Driver, ddg fork (device-scoped profile/mode CLI, WITH_ENV_VARS)"
 arch=('x86_64')
 url='https://github.com/davidedg/ckb-next-ddg'
 license=('GPL-2.0-only')
@@ -18,6 +18,8 @@ depends=(
   quazip-qt6
   libxcb
   xcb-util-wm
+  libxkbcommon
+  xkeyboard-config
   systemd-libs
   bash
   glibc

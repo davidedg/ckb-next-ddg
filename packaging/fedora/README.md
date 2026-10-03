@@ -1,7 +1,7 @@
 # Release procedure (Fedora / Copr)
 
 Copr builds from the moving tag `copr-build`, not `master`. Any new tag/branch push triggers a
-rebuild from wherever `copr-build` currently points, regardless of which ref triggered it — so
+rebuild from wherever `copr-build` currently points, regardless of which ref triggered it, so
 move the tag *before* creating a new one, or a spurious trigger (e.g. pushing an unrelated
 branch) would rebuild unreleased work.
 
@@ -42,7 +42,7 @@ branch) would rebuild unreleased work.
    or `copr-cli list-builds davidedg/ckb-next-ddg`.
 
 GitHub's "create" webhook event can't be scoped to tags only (it covers branches too); "Releases"
-was tried as a more selective alternative and doesn't work — Copr acks the delivery but never
+was tried as a more selective alternative and doesn't work: Copr acks the delivery but never
 starts a build. Hence the moving tag instead of a different GitHub event.
 
 ## Local validation before tagging (optional)

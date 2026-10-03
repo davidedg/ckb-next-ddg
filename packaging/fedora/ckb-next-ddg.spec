@@ -51,6 +51,7 @@ BuildRequires:  cmake(zlib)
 BuildRequires:  libappindicator-devel
 BuildRequires:  libgudev-devel
 BuildRequires:  libxcb-devel
+BuildRequires:  pkgconfig(xkbcommon)
 BuildRequires:  pulseaudio-libs-devel
 BuildRequires:  wayland-protocols-devel
 BuildRequires:  xcb-util-devel
@@ -61,6 +62,8 @@ BuildRequires:  systemd-devel
 
 Requires:       qt6-qtbase
 Requires:       hicolor-icon-theme
+# the XKB data a new hardware Text of the K95 RGB Platinum is converted with
+Requires:       xkeyboard-config
 
 Provides:       ckb-next = %{base_version}
 Conflicts:      ckb-next

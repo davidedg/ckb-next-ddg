@@ -1,5 +1,5 @@
 pkgbase = ckb-next-ddg
-	pkgdesc = Corsair Keyboard and Mouse RGB Driver — ddg fork (device-scoped profile/mode CLI, WITH_ENV_VARS)
+	pkgdesc = Corsair Keyboard and Mouse RGB Driver, ddg fork (device-scoped profile/mode CLI, WITH_ENV_VARS)
 	pkgver = 0.6.2.ddg.5
 	pkgrel = 1
 	url = https://github.com/davidedg/ckb-next-ddg

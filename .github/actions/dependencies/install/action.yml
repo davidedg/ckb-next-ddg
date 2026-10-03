@@ -11,6 +11,7 @@ inputs:
       qt6-qttools-dev
       quazip-dev
       xcb-util-wm-dev
+      libxkbcommon-dev
       qt6-qtwayland-dev
       wayland-protocols
 
@@ -23,6 +24,7 @@ inputs:
       libpulse
       libxcb
       xcb-util-wm
+      libxkbcommon
       qt6-base
       quazip-qt6
       qt6-tools
@@ -34,6 +36,7 @@ inputs:
       cmake
       glibc
       libxcb-devel
+      libxkbcommon-devel
       make
       pulseaudio-libs-devel
       qt6-linguist
@@ -58,6 +61,7 @@ inputs:
       dbusmenu-qt5-devel
       glibc
       libxcb-devel
+      libxkbcommon-devel
       make
       pulseaudio-libs-devel
       qt5-linguist
@@ -84,6 +88,7 @@ inputs:
       libxcb-ewmh-dev
       libxcb-screensaver0-dev
       libxcb1-dev
+      libxkbcommon-dev
       qtbase5-dev
       qttools5-dev
       zlib1g-dev
@@ -103,6 +108,7 @@ inputs:
       libxcb-screensaver0-dev
       libxcb-ewmh-dev
       libxcb1-dev
+      libxkbcommon-dev
       qt6-base-private-dev
       wayland-protocols
 
