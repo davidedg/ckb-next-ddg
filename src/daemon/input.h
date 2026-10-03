@@ -19,6 +19,10 @@ void initbind(binding* bind, usbdevice* kb);
 // Frees key binding data for a device. Lock imutex first.
 void freebind(binding* bind);
 
+// Cancel and drain all playback before closing input. Called with imutex held;
+// releases it while waiting and returns with it held. Workers never take dmutex.
+void stop_macros(usbdevice* kb);
+
 // Note: unlike most commands, bind commands will lock/unlock the device's imutex
 // Binds a key
 void cmd_bind(usbdevice* kb, usbmode* mode, int dummy, int keyindex, const char* to);
@@ -51,24 +55,15 @@ int os_setupindicators(usbdevice* kb);
 // OS Specific function to either send a report to the input subsystem, or sync the previously sent events
 void os_inputsync(usbdevice* kb, int s_kb, int m);
 
-///
-/// \brief struct parameter contains the values for a fresh started macro_play thread.
-/// \a parameter_t is the typedef for it.
-///
+// The binding owns the macro until removal. An active worker then owns it until
+// completion. abort is written with imutex and mmutex2 held; event playback reads
+// it under imutex, FIFO waiters under mmutex2. All other macro state uses imutex.
 typedef struct _macro_param {
     usbdevice* kb;
     keymacro* macro;
-    macroaction* actions;
-    int actioncount;
+    struct _macro_param* next;
     char abort;
+    char removed; // protected by imutex: binding has transferred ownership
 } macro_param;
-
-/// \brief struct ptlist is one element in the single linked list to store  macro_play threads waiting for their execution
-/// \a ptlist_t is the typedef for it.
-///
-typedef struct ptlist {
-    struct ptlist* next;
-    pthread_t thread_id;
-} ptlist_t;
 
 #endif  // INPUT_H

@@ -816,6 +816,7 @@ int closeusb(usbdevice* kb){
     }
 
     queued_mutex_lock(imutex(kb));
+    stop_macros(kb);
     os_inputclose(kb);
 
     // Close USB device

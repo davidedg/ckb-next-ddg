@@ -23,65 +23,52 @@ static int macromask(const uchar* keys, const uchar* macro){
     return 1;
 }
 
-///
-/// \brief pt_head is the head pointer for the single linked thread list managed by macro_pt_en/dequeue().
-static ptlist_t* pt_head = 0;
-/// \brief pt_tail is the tail pointer for the single linked thread list managed by macro_pt_en/dequeue().
-static ptlist_t* pt_tail = 0;
-
-// FIXME: Most of the following macro queueing code is wrong.
-// We can't assume pthread_t is an arithmetic type, so assigning it to 0 is incorrect.
-
-///
-/// \brief macro_pt_enqueue Save the new thread in the single linked list (FIFO).
-/// \attention Becuase multiple threads may use this function in parallel,
-/// save the critical section with a mutex.
-///
-static void macro_pt_enqueue() {
-    ptlist_t* new_elem = malloc(sizeof(ptlist_t));
-    if (!new_elem) {
-        perror("macro_pt_enqueue: ");
-        exit (-1);  ///< exit on critical situation; \todo find a better exit strategy if no more mem available.
-    }
-    new_elem->next = 0;
-    new_elem->thread_id = pthread_self();   ///< The element knows its ID byself
-    if (pt_head == 0) {
-        pt_head = pt_tail = new_elem;       ///< new list, first element
-    } else {
-        pt_tail->next = new_elem;           ///< existing list, append on last element (FIFO)
-        pt_tail = new_elem;
-    }
+// FIFO operations require mmutex2. Enqueue before creating the thread, so
+// scheduling cannot reverse trigger order. Removal also handles cancelled waiters.
+static void macro_enqueue(usbdevice* kb, macro_param* param){
+    if(kb->macro_tail)
+        kb->macro_tail->next = param;
+    else
+        kb->macro_head = param;
+    kb->macro_tail = param;
 }
 
-///
-/// \brief macro_pt_dequeue gets the first thread id of the list and returns the thread_id stored in it.
-/// \return the ptread_id of the first element. If list is empty, return 0.
-/// \attention Becuase multiple threads may use this function in parallel,
-/// save the critical section with a mutex.
-///
-static pthread_t macro_pt_dequeue() {
-    pthread_t retval = 0;
-    ptlist_t* elem = 0;
-    if (pt_head == 0 && pt_tail == 0) {
-        ckb_err("macro_pt_dequeue: called on empty list.");
-        return 0;       ///< why are we called?
+static void macro_remove(usbdevice* kb, macro_param* param){
+    macro_param** link = &kb->macro_head;
+    macro_param* previous = NULL;
+    while(*link && *link != param){
+        previous = *link;
+        link = &(*link)->next;
     }
-    elem = pt_head;
-    pt_head = pt_head->next;
-    if (pt_head == 0) pt_tail = 0;      ///< Was last element in the list, so clear tail.
-    retval = elem->thread_id;           ///< save the return value before deleting element
-    free(elem);
-    return retval;
+    assert(*link == param);
+    *link = param->next;
+    if(kb->macro_tail == param)
+        kb->macro_tail = previous;
+    pthread_cond_broadcast(mvar(kb));
 }
 
-///
-/// \brief macro_pt_first returns the first pthread_id but does not remove the first entry.
-/// \return the pthread_id of the first element in the list or 0 if list is empty.
-/// \attention Becuase multiple threads may use this function in parallel,
-/// save the critical section with a mutex (avoid NIL-ptr)
-///
-static pthread_t macro_pt_first() {
-    return pt_head? pt_head->thread_id : 0;
+// Called with imutex held. Destruction transfers ownership to the worker.
+static void abort_macro(macro_param* param){
+    usbdevice* kb = param->kb;
+    pthread_mutex_lock(mmutex2(kb));
+    param->abort = 1;
+    pthread_cond_broadcast(mvar(kb));
+    pthread_mutex_unlock(mmutex2(kb));
+    pthread_cond_broadcast(mintvar(kb));
+}
+
+void stop_macros(usbdevice* kb){
+    kb->macro_stopping = 1;
+    pthread_mutex_lock(mmutex2(kb));
+    for(macro_param* p = kb->macro_head; p; p = p->next)
+        p->abort = 1;
+    pthread_cond_broadcast(mvar(kb));
+    pthread_cond_broadcast(mintvar(kb));
+    queued_mutex_unlock(imutex(kb));
+    while(kb->macro_head)
+        pthread_cond_wait(mvar(kb), mmutex2(kb));
+    pthread_mutex_unlock(mmutex2(kb));
+    queued_mutex_lock(imutex(kb));
 }
 
 // Default macro keystroke delay
@@ -91,69 +78,78 @@ const struct timespec macrodelay = { .tv_nsec = 1 * NANOSECONDS_PER_MILLISECONDS
 #define REPETITION_DEFAULT_VALUE 500
 #define REPETITION_MAX_VALUE 2000
 
-static inline void clock_microsleep(uint32_t s) {
-    const struct timespec ts = {
-        .tv_sec = s / 1000000,
-        .tv_nsec = (s % 1000000) * 1000,
-    };
-    clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
+// Interruptible action delay. imutex is held on entry/return; a wake-up caused
+// by a trigger must not shorten the requested delay. Split long waits because
+// queued_cond_nanosleep accepts a uint32_t nanosecond duration.
+static void macro_delay(macro_param* param, uint32_t us){
+    usbdevice* kb = param->kb;
+    struct timespec now;
+    if(clock_gettime(CLOCK_MONOTONIC, &now))
+        return;
+    uint64_t deadline = (uint64_t)now.tv_sec * 1000000000 + now.tv_nsec + (uint64_t)us * 1000;
+    while(!param->abort){
+        if(clock_gettime(CLOCK_MONOTONIC, &now))
+            break;
+        uint64_t current = (uint64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+        if(current >= deadline)
+            break;
+        uint64_t remaining = deadline - current;
+        queued_cond_nanosleep(mintvar(kb), imutex(kb), remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining);
+    }
 }
 
-///
-/// \brief play_macro is the code for all threads started to play a macro.
-/// \param param \a macro_param to store Kb-ptr and macro-ptr (thread may get only one user-parameter)
-/// \return 0 on success, -1 else (no one is interested in it except the kernel...)
-///
-static void* play_macro(void* param) {
+static void* play_macro(void* param){
     macro_param* ptr = param;
     usbdevice* kb = ptr->kb;
     keymacro* macro = ptr->macro;
-
 #ifdef OS_MAC
     pthread_setname_np("ckb macro");
-#endif // OS_MAC
-
-    /// First have a look if we are the first and only macro-thread to run. If not, wait.
-    /// So enqueue our thread first, so it is remembered for us and can be seen by all others.
+#endif
     pthread_mutex_lock(mmutex2(kb));
-    macro_pt_enqueue();
-    // ckb_info("Entering critical section with 0x%lx. Queue head is 0x%lx",  (unsigned long int)pthread_self(), (unsigned long int)macro_pt_first());
-    while (macro_pt_first() != pthread_self()) {    ///< If the first thread in the list is not our, another one is running
-        // ckb_info("Now waiting with 0x%lx because of 0x%lx", (unsigned long int)pthread_self(), (unsigned long int)macro_pt_first());
+    while(kb->macro_head != ptr && !ptr->abort)
         pthread_cond_wait(mvar(kb), mmutex2(kb));
-        // ckb_info("Waking up with 0x%lx", (unsigned long int)pthread_self());
-    }
-    pthread_mutex_unlock(mmutex2(kb));       ///< Give all new threads the chance to enter the block.
+    pthread_mutex_unlock(mmutex2(kb));
 
-    /*
-     * Is this the first time the macro is being repeated due to the key being
-     * held down continuously?
-     */
+    // Track keys emitted by this playback, including mouse buttons, so an
+    // interrupted sequence does not leave its modifiers/buttons held down.
+    short* pressed = calloc(macro->actioncount, sizeof(*pressed));
+    int pressed_count = 0;
     int first_keydownloop = 1;
-    while(1){
-        /// Send events for each keypress in the macro
-        queued_mutex_lock(mmutex(kb)); ///< Synchonization between macro output and color information
-        for (int a = 0; a < ptr->actioncount; a++) {
-            macroaction* action = ptr->actions + a;
-            if (action->rel_x != 0 || action->rel_y != 0){
+    queued_mutex_lock(imutex(kb));
+    if(!pressed)
+        macro->triggered = 0;
+    while(pressed && !ptr->abort){
+        for(int a = 0; a < macro->actioncount && !ptr->abort; ++a){
+            macroaction* action = macro->actions + a;
+            queued_mutex_lock(mmutex(kb));
+            if(action->rel_x || action->rel_y){
                 os_mousemove(kb, action->rel_x, action->rel_y);
                 os_inputsync(kb, 0, 1);
             } else {
-                if(IS_SCROLLWHEEL_V(action->scan)) {
+                if(IS_SCROLLWHEEL_V(action->scan)){
                     if(action->down)
-                        os_mousescroll(kb, 0, (action->scan == BTN_WHEELUP ? 1 : -1));
-                } else if(IS_SCROLLWHEEL_H(action->scan)) {
+                        os_mousescroll(kb, 0, action->scan == BTN_WHEELUP ? 1 : -1);
+                } else if(IS_SCROLLWHEEL_H(action->scan)){
                     if(action->down)
-                        os_mousescroll(kb, (action->scan == BTN_WHEELLEFT ? -1 : 1), 0);
+                        os_mousescroll(kb, action->scan == BTN_WHEELLEFT ? -1 : 1, 0);
                 } else {
                     os_keypress(kb, action->scan, action->down);
+                    int i = 0;
+                    while(i < pressed_count && pressed[i] != action->scan) ++i;
+                    if(action->down && i == pressed_count)
+                        pressed[pressed_count++] = action->scan;
+                    else if(!action->down && i < pressed_count)
+                        pressed[i] = pressed[--pressed_count];
                 }
-                int sync_mouse = action->scan & SCAN_MOUSE;
-                os_inputsync(kb, !sync_mouse, sync_mouse);
-
-                queued_mutex_unlock(mmutex(kb));           ///< use this unlock / relock for enablling the parallel running colorization
-                if (action->delay != UINT32_MAX && action->delay) {    ///< local delay set
-                    if(action->delay_max) {
+                int mouse = action->scan & SCAN_MOUSE;
+                os_inputsync(kb, !mouse, mouse);
+            }
+            queued_mutex_unlock(mmutex(kb));
+            if(action->rel_x || action->rel_y)
+                continue;
+            uint32_t delay_us = 1000;
+            if(action->delay != UINT32_MAX && action->delay){
+                if(action->delay_max){
                         // Generate a random delay in the range requested
                         // First, we need a random number that can be as large as uint32_t
                         // RAND_MAX can be as low as 0x7fff
@@ -163,74 +159,91 @@ static void* play_macro(void* param) {
                         final |= (second << 1);
                         // Now that we have a sufficently large random number, range it appropriately
                         final = ((uint64_t)action->delay + (uint64_t)final) % (action->delay_max - action->delay);
-                        clock_microsleep(final);
-                    } else {
-                        clock_microsleep(action->delay);
-                    }
-                } else {
-                    clock_nanosleep(CLOCK_MONOTONIC, 0, &macrodelay, NULL);
-                }
-                queued_mutex_lock(mmutex(kb));
+                        delay_us = final;
+                } else
+                    delay_us = action->delay;
             }
+            macro_delay(ptr, delay_us);
         }
-
-        queued_mutex_unlock(mmutex(kb));
-
-        uint32_t delay_ns = first_keydownloop
-            ? macro->repetition_debounce_ms * NANOSECONDS_PER_MILLISECONDS
-            : macro->repetition_delay_ms * NANOSECONDS_PER_MILLISECONDS;
-
-        queued_mutex_lock(imutex(kb));
-        // detect if the macro playback has been aborted
-        if (ptr->abort) {
-            // we are responsible for free-ing actions.
-            free(ptr->actions);
+        if(ptr->abort)
             break;
-        }
-
-        if (macro->triggered > 1) {
+        uint32_t delay_ns = (first_keydownloop ? macro->repetition_debounce_ms : macro->repetition_delay_ms)
+            * NANOSECONDS_PER_MILLISECONDS;
+        if(macro->triggered > 1){
             macro->triggered -= 2;
             delay_ns = 0;
             first_keydownloop = 1;
         }
-
-        if (macro->triggered == 0)
+        if(!macro->triggered)
             break;
-
-        if (!delay_ns) {
-            queued_mutex_unlock(imutex(kb));
+        if(!delay_ns)
             continue;
-        }
-
         queued_cond_nanosleep(mintvar(kb), imutex(kb), delay_ns);
-
-        if (macro->triggered == 2) {
-            // the key was released, but not pressed again, during the sleep
+        if(ptr->abort)
+            break;
+        if(macro->triggered == 2){
             macro->triggered = 0;
             break;
         }
-
-        // if the key released and pressed during the sleep, reset to use the default repetition value
-        if (macro->triggered == 1)
+        if(macro->triggered == 1)
             first_keydownloop = 0;
-
-        queued_mutex_unlock(imutex(kb));
     }
-    if (!ptr->abort)
-        macro->param = NULL;
+    if(ptr->abort){
+        queued_mutex_lock(mmutex(kb));
+        while(pressed_count){
+            int scan = pressed[--pressed_count];
+            os_keypress(kb, scan, 0);
+            os_inputsync(kb, !(scan & SCAN_MOUSE), scan & SCAN_MOUSE);
+        }
+        queued_mutex_unlock(mmutex(kb));
+    }
+    macro->param = NULL;
+    // Only removed bindings transfer ownership. Shutdown cancels the retained
+    // ones too; the profile frees those after stop_macros has drained the FIFO.
+    if(ptr->removed){
+        free(macro->actions);
+        free(macro);
+    }
+    free(pressed);
     queued_mutex_unlock(imutex(kb));
 
-    queued_mutex_lock(mmutex(kb));
+    pthread_mutex_t* queue_mutex = mmutex2(kb);
+    pthread_mutex_lock(queue_mutex);
+    macro_remove(kb, ptr);
+    free(ptr);
+    // No access to kb after this unlock: closeusb may now recycle the device.
+    pthread_mutex_unlock(queue_mutex);
+    return NULL;
+}
 
-    pthread_mutex_lock(mmutex2(kb));    ///< protect the linked list and the mvar
-    // ckb_info("Now leaving 0x%lx and waking up all others", (unsigned long int)pthread_self());
-    macro_pt_dequeue();
-    pthread_cond_broadcast(mvar(kb));   ///< Wake up all waiting threads
-    pthread_mutex_unlock(mmutex2(kb));  ///< for the linked list and the mvar
-
-    queued_mutex_unlock(mmutex(kb));   ///< Sync keyboard input/output and colorization
-    free(param);
-    return 0;
+// imutex is held by inputupdate_keys; failure keeps the binding and no worker.
+static void start_macro(usbdevice* kb, keymacro* macro){
+    macro_param* params = calloc(1, sizeof(*params));
+    if(!params){
+        macro->triggered = 0;
+        ckb_err("Could not allocate macro playback");
+        return;
+    }
+    params->kb = kb;
+    params->macro = macro;
+    macro->param = params;
+    pthread_mutex_lock(mmutex2(kb));
+    macro_enqueue(kb, params);
+    pthread_t thread;
+    int retval = pthread_create(&thread, NULL, play_macro, params);
+    if(retval){
+        macro->triggered = 0;
+        macro->param = NULL;
+        macro_remove(kb, params);
+        free(params);
+        ckb_err("Could not create macro thread: %s", strerror(retval));
+    } else {
+        pthread_detach(thread);
+#ifndef OS_MAC
+        pthread_setname_np(thread, "ckb macro");
+#endif
+    }
+    pthread_mutex_unlock(mmutex2(kb));
 }
 
 // Checks if the macro mask contains any wheels to prevent it from looping endlessly
@@ -267,9 +280,9 @@ static inline void inputupdate_keys(usbdevice* kb, int* sync_kb, int* sync_mouse
     if(!memcmp(input->prevkeys, input->keys, N_KEYBYTES_INPUT))
         return;
     // Look for macros matching the current state
-    if (kb->active) {
+    if (kb->active && !kb->macro_stopping) {
         for (int i = 0; i < bind->macrocount; i++) {
-            keymacro* macro = &bind->macros[i];
+            keymacro* macro = bind->macros[i];
             // see the definition of keymacro.triggered in structures.h
             if (macromask(input->keys, macro->combo)) {
                 if(!(macro->triggered & 1)){
@@ -291,33 +304,7 @@ static inline void inputupdate_keys(usbdevice* kb, int* sync_kb, int* sync_mouse
             if (macro->triggered <= 3) {
                 // start up a thread if there isn't already one running
                 if (!macro->param) {
-                    // assert(macro->triggered == 1)
-                    macro_param* params = malloc(sizeof(macro_param));
-                    if (params == NULL) {
-                        perror("inputupdate_keys got no more mem:");
-                    } else {
-                        params->kb = kb;
-                        params->macro = macro;
-                        params->actions = macro->actions;
-                        params->actioncount = macro->actioncount;
-                        params->abort = 0;
-                        macro->param = params;
-                        pthread_t thread;
-                        int retval = pthread_create(&thread, 0, play_macro, params);
-                        if (retval) {
-                            macro->triggered = 0;
-                            macro->param = NULL;
-                            perror("inputupdate_keys: Creating thread returned not null");
-                        } else {
-                            pthread_detach(thread);
-
-#ifndef OS_MAC
-                            // name thread externally if it was created on non-mac systems
-                            // ignore the result
-                            pthread_setname_np(thread, "ckb macro");
-#endif // OS_MAC
-                        }
-                    }
+                    start_macro(kb, macro);
                 } else {
                     // if there is already a thread running, it may be waiting for DELAY_REPEAT_*
                     // it does not need to wait anymore
@@ -563,23 +550,26 @@ void updateindicators_kb(usbdevice* kb, int force){
 /// \param macro
 ///
 static inline void destroymacro(keymacro* macro) {
-    if (macro->param)
-        macro->param->abort = 1;
-    else
+    if (macro->param){
+        macro->param->removed = 1;
+        abort_macro(macro->param);
+    } else {
         free(macro->actions);
+        free(macro);
+    }
 }
 
 void initbind(binding* bind, usbdevice* kb){
     for(int i = 0; i < N_KEYS_INPUT; i++)
         bind->base[i] = kb->keymap[i].scan;
-    bind->macros = calloc(32, sizeof(keymacro));
-    bind->macrocap = 32;
+    bind->macros = calloc(32, sizeof(keymacro*));
+    bind->macrocap = bind->macros ? 32 : 0;
     bind->macrocount = 0;
 }
 
 void freebind(binding* bind){
     for(int i = 0; i < bind->macrocount; i++)
-        destroymacro(&bind->macros[i]);
+        destroymacro(bind->macros[i]);
     free(bind->macros);
     memset(bind, 0, sizeof(*bind));
 }
@@ -635,7 +625,7 @@ static void _cmd_macro(usbmode* mode, const char* keys, const char* assignment, 
     if(!keys && !assignment){
         // Null strings = "macro clear" -> erase the whole thing
         for(int i = 0; i < bind->macrocount; i++)
-            destroymacro(&bind->macros[i]);
+            destroymacro(bind->macros[i]);
         bind->macrocount = 0;
         return;
     }
@@ -671,6 +661,8 @@ static void _cmd_macro(usbmode* mode, const char* keys, const char* assignment, 
     }
     // Allocate a buffer for them
     macro.actions = calloc(count, sizeof(macroaction));
+    if(!macro.actions)
+        return;
     macro.actioncount = 0;
     // Scan the actions
     position = 0;
@@ -736,19 +728,28 @@ static void _cmd_macro(usbmode* mode, const char* keys, const char* assignment, 
             position++;
     }
 
+    keymacro* replacement = NULL;
+    if(macro.actioncount){
+        replacement = malloc(sizeof(*replacement));
+        if(!replacement){
+            free(macro.actions);
+            return;
+        }
+        *replacement = macro;
+    }
     // See if there's already a macro with this trigger
-    keymacro* macros = bind->macros;
+    keymacro** macros = bind->macros;
     for(int i = 0; i < bind->macrocount; i++){
-        if(!memcmp(macros[i].combo, macro.combo, N_KEYBYTES_INPUT)){
-            destroymacro(&macros[i]);
+        if(!memcmp(macros[i]->combo, macro.combo, N_KEYBYTES_INPUT)){
+            destroymacro(macros[i]);
             // If the new macro has no actions, erase the existing one
             if(!macro.actioncount){
                 for(int j = i + 1; j < bind->macrocount; j++)
-                    memcpy(macros + j - 1, macros + j, sizeof(keymacro));
+                    macros[j - 1] = macros[j];
                 bind->macrocount--;
             } else
                 // If there are actions, replace the existing with the new
-                memcpy(macros + i, &macro, sizeof(keymacro));
+                macros[i] = replacement;
             return;
         }
     }
@@ -756,9 +757,17 @@ static void _cmd_macro(usbmode* mode, const char* keys, const char* assignment, 
     // Add the macro to the device settings if not empty
     if(macro.actioncount < 1)
         return;
-    memcpy(bind->macros + (bind->macrocount++), &macro, sizeof(keymacro));
-    if(bind->macrocount >= bind->macrocap)
-        bind->macros = realloc(bind->macros, (bind->macrocap += 16) * sizeof(keymacro));
+    if(bind->macrocount == bind->macrocap){
+        int capacity = bind->macrocap + 16;
+        keymacro** expanded = realloc(bind->macros, capacity * sizeof(*expanded));
+        if(!expanded){
+            destroymacro(replacement);
+            return;
+        }
+        bind->macros = expanded;
+        bind->macrocap = capacity;
+    }
+    bind->macros[bind->macrocount++] = replacement;
 }
 
 void cmd_macro(usbdevice* kb, usbmode* mode, const int notifynumber, const char* keys, const char* assignment){

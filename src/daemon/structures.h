@@ -67,7 +67,7 @@ typedef struct {
     // Base bindings
     int base[N_KEYS_INPUT];
     // Macros
-    keymacro* macros;
+    keymacro** macros;
     int macrocount;
     int macrocap;
 } binding;
@@ -316,6 +316,11 @@ typedef struct usbdevice_ {
     pthread_t thread;
     // Thread for device input. Will close on its own when the device is terminated.
     pthread_t inputthread;
+    // Macro FIFO, protected by mmutex2; workers are drained before input closes.
+    struct _macro_param* macro_head;
+    struct _macro_param* macro_tail;
+    // Protected by imutex: disconnection must not start another worker.
+    char macro_stopping;
     // Keyboard settings
     usbprofile* profile;
     // Hardware modes. Null if not read yet
