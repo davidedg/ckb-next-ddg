@@ -64,43 +64,47 @@ int setactive_kb(usbdevice* kb, int active){
         if(!usbsend(kb, msg[0], MSG_SIZE, 1))
             return -1;
         DELAY_30MS();
-        if(!usbsend(kb, msg[0], MSG_SIZE, 1))
-            return -1;
-        DELAY_30MS();
-#ifdef OS_LINUX
-        // On OSX the default key mappings are fine. On Linux, the G keys will freeze the keyboard. Set the keyboard entirely to HID input.
-        for(int k = 0; k < N_KEYS_HW; ){
-            int pair;
-            for(pair = 0; pair < 30 && k < N_KEYS_HW; pair++, k++){
-                uchar action = IN_HID;
-                // Enable hardware actions
-                if(kb->keymap[k].name){
-                    if(!strcmp(kb->keymap[k].name, "mr"))
-                        action = ACT_MR_RING;
-                    else if(!strcmp(kb->keymap[k].name, "m1"))
-                        action = ACT_M1;
-                    else if(!strcmp(kb->keymap[k].name, "m2"))
-                        action = ACT_M2;
-                    else if(!strcmp(kb->keymap[k].name, "m3"))
-                        action = ACT_M3;
-                    else if(!strcmp(kb->keymap[k].name, "light"))
-                        action = ACT_LIGHT;
-                    else if(!strcmp(kb->keymap[k].name, "lock"))
-                        action = ACT_LOCK;
-                }
-                msg[1][4 + pair * 2] = k;
-                msg[1][5 + pair * 2] = action;
-            }
-            // Byte 2 = pair count (usually 30, less on final message)
-            msg[1][2] = pair;
-            if(!usbsend(kb, msg[1], MSG_SIZE, 1))
+        // Some keyboards lose their hardware macros and profile key if the key input table is rewritten: for them the
+        // mode switch alone is enough (see NEEDS_MODE_ONLY_EXIT)
+        if(!NEEDS_MODE_ONLY_EXIT(kb)){
+            if(!usbsend(kb, msg[0], MSG_SIZE, 1))
                 return -1;
-        }
-        // Commit new input settings
-        if(!usbsend(kb, msg[2], MSG_SIZE, 1))
-            return -1;
-        DELAY_30MS();
+            DELAY_30MS();
+#ifdef OS_LINUX
+            // On OSX the default key mappings are fine. On Linux, the G keys will freeze the keyboard. Set the keyboard entirely to HID input.
+            for(int k = 0; k < N_KEYS_HW; ){
+                int pair;
+                for(pair = 0; pair < 30 && k < N_KEYS_HW; pair++, k++){
+                    uchar action = IN_HID;
+                    // Enable hardware actions
+                    if(kb->keymap[k].name){
+                        if(!strcmp(kb->keymap[k].name, "mr"))
+                            action = ACT_MR_RING;
+                        else if(!strcmp(kb->keymap[k].name, "m1"))
+                            action = ACT_M1;
+                        else if(!strcmp(kb->keymap[k].name, "m2"))
+                            action = ACT_M2;
+                        else if(!strcmp(kb->keymap[k].name, "m3"))
+                            action = ACT_M3;
+                        else if(!strcmp(kb->keymap[k].name, "light"))
+                            action = ACT_LIGHT;
+                        else if(!strcmp(kb->keymap[k].name, "lock"))
+                            action = ACT_LOCK;
+                    }
+                    msg[1][4 + pair * 2] = k;
+                    msg[1][5 + pair * 2] = action;
+                }
+                // Byte 2 = pair count (usually 30, less on final message)
+                msg[1][2] = pair;
+                if(!usbsend(kb, msg[1], MSG_SIZE, 1))
+                    return -1;
+            }
+            // Commit new input settings
+            if(!usbsend(kb, msg[2], MSG_SIZE, 1))
+                return -1;
+            DELAY_30MS();
 #endif
+        }
     }
     // Update indicator LEDs if the profile contains settings for them
     kb->vtable.updateindicators(kb, 0);

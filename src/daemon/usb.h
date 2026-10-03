@@ -265,6 +265,12 @@ const char* product_str(ushort product);
 /// deinitialise the device, skipping the usbhid handover.
 #define NEEDS_UNCLEAN_EXIT(kb)          ((kb)->product == P_K65_RFIRE || (kb)->product == P_K70_RFIRE || (kb)->product == P_K70_RFIRE_NRGB || (kb)->product == P_K95)
 
+/// Devices whose firmware runs its hardware macros and profile key only while the key input table is left as it is.
+/// They are handed back to hardware mode the way iCUE does it: the mode switch alone ("07 04 01" once), no key input
+/// table. Rewriting it as HID-only, which setactive_kb() does on Linux for the other devices, kills both until the
+/// keyboard is power cycled. Verified on Linux with the K95 RGB Platinum, firmware 3.29, only.
+#define NEEDS_MODE_ONLY_EXIT(kb)        IS_PLATINUM(kb)
+
 /// Used for new devices that come with V3 firmware endpoint configuration out of the factory, but have fwversion < 0x300.
 /// Note: only the RGB variant of the K68 needs a v3 override.
 /// Note: P_K70_MK2 doesn't seem to require this, but it was added as a precaution

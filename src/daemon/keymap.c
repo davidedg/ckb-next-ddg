@@ -934,12 +934,21 @@ void process_input_urb(void* context, unsigned char* buffer, int urblen, ushort 
                     }
                 } else {
 #define NXP_STRAFE_MEDIA_WORKAROUND(kb) (kb->vendor == V_CORSAIR && kb->product == P_STRAFE)
+#define K95P_MOUSE_IN     0x05
+#define K95P_MOUSE_IN_LEN 10
 #define NXP_STRAFE_MEDIA_MASK 0x3e
 //#define NXP_STRAFE_VOL_MASK 0xc
                     // Accept NKRO only if device is not active, unless it's media keys and it's an original strafe with the media key bug
                     if(firstbyte == NKRO_KEY_IN || firstbyte == NKRO_MEDIA_IN) {
                         if(!targetkb->active || (firstbyte == NKRO_MEDIA_IN && NXP_STRAFE_MEDIA_WORKAROUND(targetkb)))
                             hid_kb_translate(targetkb, urblen, buffer);
+                    } else if(firstbyte == K95P_MOUSE_IN && urblen == K95P_MOUSE_IN_LEN && IS_PLATINUM(targetkb)) {
+                        // The K95 Platinum's own mouse report: what the firmware sends for a key remapped to a mouse button in
+                        // a hardware profile (PROFILE.MAP, c8..cc). Report 05 of its HID descriptor: 32 buttons, X and Y (16
+                        // bits), the wheel; without the id it is what hid_mouse_translate() reads. Taken like the NKRO keys, in
+                        // hardware mode only (it used to be dropped as unknown data, and the click never reached the system)
+                        if(!targetkb->active)
+                            hid_mouse_translate(&targetkb->input, urblen - 1, buffer + 1);
                     } else if(urblen == MSG_SIZE) {
                         if((kb->fwversion >= 0x130 || IS_V2_OVERRIDE(kb)) && firstbyte == CORSAIR_IN) // Ugly hack due to old FW 1.15 packets having no report id
                             buffer++;
