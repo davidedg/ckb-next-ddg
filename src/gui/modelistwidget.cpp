@@ -114,7 +114,9 @@ void ModeListWidget::resizeEvent(QResizeEvent* event) {
     // Calculate the width of the model name column
     // It "stretches" if it's smaller than the free space, or expands to its full size if larger
     // to create a scrollbar
-    int maxWidth = viewport()->width() - frameWidth()*2 - verticalHeader()->sectionSize(ModeListTableModel::COL_MODE_ICON);
+    // (the viewport is already inside the frame, and the icon column has its own width: the row height and the frame, taken
+    // from the viewport instead, left the table a few pixels too wide and a scrollbar always visible)
+    int maxWidth = viewport()->width() - horizontalHeader()->sectionSize(ModeListTableModel::COL_MODE_ICON);
     if(verticalScrollBar()->isVisible())
         maxWidth -= verticalScrollBar()->width();
 
