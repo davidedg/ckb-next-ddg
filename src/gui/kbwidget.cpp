@@ -33,6 +33,11 @@ KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector
     prevmode(nullptr)
 {
     ui->setupUi(this);
+    {   // the note under the list of slots: muted, as a hint
+        QPalette pal = ui->hwSlotNote->palette();
+        pal.setColor(QPalette::WindowText, pal.color(QPalette::Disabled, QPalette::WindowText));
+        ui->hwSlotNote->setPalette(pal);
+    }
     // The widgets of the slots of a K95P's hardware profile (hwslot1): shown by showHwBindings() and showHwSlotExtras()
     ui->hwBindWidget->hide();
     ui->k95LightBar->hide();
@@ -322,6 +327,8 @@ void KbWidget::updateProfileList(){
     } else {
         ui->profileBox->setPalette(defaultProfileBoxPalette);
     }
+    // The slots of a K95P are edited here: the keyboard's active profile does not follow the selection
+    ui->hwSlotNote->setVisible(currentProfile && device->isHwSlotProfile(currentProfile));
 }
 
 void KbWidget::on_profileBox_activated(int index){

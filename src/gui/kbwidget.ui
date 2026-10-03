@@ -43,6 +43,19 @@
     </widget>
    </item>
    <item row="2" column="0">
+    <widget class="QLabel" name="hwSlotNote">
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+     <property name="text">
+      <string>This is only a slot editor: selecting a slot here does not switch the active profile on the keyboard.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item row="3" column="0">
     <widget class="QPushButton" name="hwSaveButton">
      <property name="sizePolicy">
       <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
@@ -55,7 +68,7 @@
      </property>
     </widget>
    </item>
-   <item row="3" column="0">
+   <item row="4" column="0">
     <widget class="QPushButton" name="hwSaveAllButton">
      <property name="text">
       <string>Save ALL to hardware</string>
@@ -165,7 +178,7 @@
      </attribute>
     </widget>
    </item>
-   <item row="0" column="1" rowspan="4">
+   <item row="0" column="1" rowspan="5">
     <widget class="QTabWidget" name="tabWidget">
      <property name="sizePolicy">
       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
