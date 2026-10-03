@@ -13,13 +13,10 @@
 #include "compat/qrand.h"
 #include <set>
 
-// The daemon checks command words before it decodes arguments. For the K95P,
-// leaving even ASCII letters unescaped in a name can execute e.g. "hwsave".
-static bool encodedModeName(KeyMap::Model model, const QString& name, QByteArray& bytes){
-    if(model != KeyMap::K95P){
-        bytes = QUrl::toPercentEncoding(name);
-        return true;
-    }
+// The daemon recognizes command words before decoding arguments, on every
+// model. Escape every UTF-8 byte so a name can never become a command token.
+// Empty or malformed names are not sent; the daemon keeps the previous name.
+static bool encodedModeName(const QString& name, QByteArray& bytes){
     QByteArray utf8 = name.toUtf8();
     if(QString::fromUtf8(utf8) != name)
         return false;
@@ -599,7 +596,7 @@ void Kb::hwSave(){
             cmd.write(" switch");
         // Write the mode name and ID
         QByteArray encoded;
-        if(!encodedModeName(_model, mode->name(), encoded))
+        if(!encodedModeName(mode->name(), encoded))
             return;
         cmd.write(" name ");
         cmd.write(encoded);
@@ -635,7 +632,7 @@ bool Kb::needsSave() const {
 
 bool Kb::writeProfileHeader(){
     QByteArray encoded;
-    if(!encodedModeName(_model, _currentProfile->name(), encoded))
+    if(!encodedModeName(_currentProfile->name(), encoded))
         return false;
     cmd.write("eraseprofile");
     // Write the profile name and ID
@@ -658,7 +655,7 @@ void Kb::pushModeNames(){
     int nameableModes = qMin(profileModes.count(), daemonModeCount);
     for(int i = 0; i < nameableModes; i++){
         QByteArray encoded;
-        if(!encodedModeName(_model, profileModes.at(i)->name(), encoded))
+        if(!encodedModeName(profileModes.at(i)->name(), encoded))
             continue;
         cmd.write(QString("mode %1 name ").arg(i + 1).toLatin1());
         cmd.write(encoded);
@@ -769,7 +766,7 @@ void Kb::frameUpdate(){
     // mode's name would clobber that slot's real name with the wrong one.
     if(rawIndex < daemonModeCount && (modeSwitched || _currentMode->needsSave())){
         QByteArray encoded;
-        if(encodedModeName(_model, _currentMode->name(), encoded)){
+        if(encodedModeName(_currentMode->name(), encoded)){
             cmd.write("name ");
             cmd.write(encoded);
             cmd.write(" ");
