@@ -2,6 +2,7 @@
 # Fork of the official Arch ckb-next package by Giovanni Harting <anonfunc@archlinux.org>
 # Upstream: https://github.com/ckb-next/ckb-next
 # Fork:     https://github.com/davidedg/ckb-next-ddg
+# Not published on the AUR for now (see aur-publish.yml here): build it locally with makepkg.
 
 pkgname=ckb-next-ddg
 pkgver=0.6.2.ddg.5

@@ -34,8 +34,9 @@ branch) would rebuild unreleased work.
    This fires the `create` webhook event that triggers Copr, already pointed at the right commit
    from step 2.
 
-   Also matches `v*.ddg.*`, so it triggers `.github/workflows/aur-publish.yml` if enabled
-   (independent of the Copr webhook).
+   Publication to the AUR is suspended: the workflow that did it on `v*.ddg.*` tags is archived
+   in [../aur/aur-publish.yml](../aur/aur-publish.yml) and no longer runs. The PKGBUILD is still
+   bumped in step 1, for local builds with `makepkg`.
 
 4. Check the build at
    [copr.fedorainfracloud.org/coprs/davidedg/ckb-next-ddg/builds](https://copr.fedorainfracloud.org/coprs/davidedg/ckb-next-ddg/builds)

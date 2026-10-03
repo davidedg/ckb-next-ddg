@@ -1,3 +1,8 @@
+# ARCHIVED: publication to the AUR is suspended, because the AUR does not accept new accounts
+# at the moment. This workflow no longer runs from here. To publish again, move it back to
+# .github/workflows/ and set the AUR_SSH_KEY secret. The PKGBUILD next to it is kept up to date
+# for building the package locally with makepkg.
+
 name: Publish to AUR
 
 on:
