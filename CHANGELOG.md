@@ -1,5 +1,27 @@
 # Change Log
 
+## [v0.6.2.ddg.6](https://github.com/davidedg/ckb-next-ddg/tree/v0.6.2.ddg.6) (2026-10-03)
+[Full Changelog](https://github.com/davidedg/ckb-next-ddg/compare/v0.6.2.ddg.5...v0.6.2.ddg.6)
+
+Release of the fork [davidedg/ckb-next-ddg](https://github.com/davidedg/ckb-next-ddg), based on ckb-next v0.6.2.
+
+Features:
+- K95 RGB Platinum: on-board (hardware) profiles, experimental and off unless the daemon is started with `--enable-experimental`. The three slots are the hardware profile of the GUI, read and written as iCUE writes them: key remaps, macros, texts, key combinations, static lighting and the performance settings (Win Lock options, indicator colours). Only firmware 3.29 with bootloader 3.03 is supported: read the warning in the README before enabling it.
+
+Bug fixes:
+- K95 RGB Platinum: the hardware macros and the profile key keep working after the daemon stops or the GUI goes idle (the keyboard is handed back to hardware mode with the mode switch alone).
+- K95 RGB Platinum: a key remapped to a mouse button in a hardware profile clicks while the daemon is running.
+- Daemon: commands split across two reads of the command FIFO are no longer dropped.
+- Daemon: a notification line is written whole, never split by another thread or cut on a full node.
+- GUI: a macro recording started before the first update of the bindings no longer writes through an uninitialised pointer.
+- GUI: with "Show animated" on, the Lighting tab no longer keeps showing the previous mode's colours after another mode is chosen from another tab.
+- GUI: a hardware mode with one colour for every key is no longer shown as near black.
+- Fixes for gcc 16 warnings and for three memory leaks in the GUI.
+
+Notes for packagers:
+- The GUI uses libxkbcommon (`USE_XKBCOMMON`, on by default when the GUI is built).
+- The PKGBUILD in `packaging/aur` is no longer published to the AUR.
+
 ## [v0.6.2](https://github.com/ckb-next/ckb-next/tree/v0.6.2) (2025-03-17)
 [Full Changelog](https://github.com/ckb-next/ckb-next/compare/v0.6.1...v0.6.2)
 

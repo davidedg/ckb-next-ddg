@@ -5,7 +5,7 @@
 # Not published on the AUR for now (see aur-publish.yml here): build it locally with makepkg.
 
 pkgname=ckb-next-ddg
-pkgver=0.6.2.ddg.5
+pkgver=0.6.2.ddg.6
 pkgrel=1
 pkgdesc="Corsair Keyboard and Mouse RGB Driver, ddg fork (device-scoped profile/mode CLI, WITH_ENV_VARS)"
 arch=('x86_64')

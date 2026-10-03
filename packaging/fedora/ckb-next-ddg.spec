@@ -13,7 +13,7 @@
 %global base_version 0.6.2
 
 Name:           ckb-next-ddg
-Version:        0.6.2.ddg.5
+Version:        0.6.2.ddg.6
 Release:        1%{?dist}
 Summary:        Corsair Keyboard and Mouse RGB Driver -- ddg fork (device-scoped profile/mode CLI, WITH_ENV_VARS)
 
@@ -166,6 +166,11 @@ udevadm control --reload-rules 2>&1 > /dev/null || :
 
 
 %changelog
+* Sat Oct 03 2026 Davide Del Grande <delgrande.davide@gmail.com> - 0.6.2.ddg.6-1
+- K95 RGB Platinum: on-board profiles, experimental (daemon option --enable-experimental)
+- K95 RGB Platinum: hardware macros and profile key keep working after the daemon exits
+- Daemon and GUI fixes; the GUI builds with libxkbcommon
+
 * Tue Sep 15 2026 Davide Del Grande <delgrande.davide@gmail.com> - 0.6.2.ddg.5-1
 - Test release: verify Copr build via the copr-build moving tag
 
