@@ -14,8 +14,9 @@ typedef enum {
 // Command operations
 typedef enum {
     // Special - handled by readcmd, no device functions
-    NONE        = -11,
-    DELAY       = -10,   CMD_FIRST = DELAY,
+    NONE        = -12,
+    HWSLOT      = -11,   CMD_FIRST = HWSLOT,   // K95 RGB Platinum (profile_cape.h); available even when IDLE
+    DELAY       = -10,
     MODE        = -9,
     SWITCH      = -8,
     LAYOUT      = -7,

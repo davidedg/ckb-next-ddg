@@ -1,4 +1,5 @@
 #include "profile.h"
+#include "profile_cape.h"
 #include "usb.h"
 #include "led.h"
 
@@ -18,6 +19,10 @@ int cmd_hwload_kb(usbdevice* kb, usbmode* dummy1, int dummy2, int apply, const c
     (void)dummy1;
     (void)dummy2;
     (void)dummy3;
+
+    // The K95 RGB Platinum keeps its profiles in files: none of the legacy commands below is ever sent to it
+    if(USES_CAPE_FS(kb))
+        return cmd_hwload_cape(kb, dummy1, dummy2, apply, dummy3);
 
     long delay = kb->usbdelay_ns;
     // Ensure delay of 10ms as the device can get overwhelmed otherwise
@@ -64,6 +69,9 @@ int cmd_hwsave_kb(usbdevice* kb, usbmode* dummy1, int dummy2, int dummy3, const 
     (void)dummy2;
     (void)dummy3;
     (void)dummy4;
+
+    if(USES_CAPE_FS(kb))
+        return cmd_hwsave_cape(kb, dummy1, dummy2, dummy3, dummy4);
 
     long delay = kb->usbdelay_ns;
     // Ensure delay of 10ms as the device can get overwhelmed otherwise

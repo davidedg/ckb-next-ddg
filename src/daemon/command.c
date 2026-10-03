@@ -1,5 +1,6 @@
 #include <limits.h>
 #include "command.h"
+#include "profile_cape.h"
 #include "includes.h"
 #include "device.h"
 #include "devnode.h"
@@ -13,6 +14,7 @@ extern int kvm_doublesend;
 
 static const char* const cmd_strings[CMD_COUNT - 1] = {
     // NONE is implicit
+    "hwslot",
     "delay",
     "mode",
     "switch",
@@ -144,6 +146,13 @@ int readcmd(usbdevice* kb, char* line){
 
         // Specially handled commands - these are available even when keyboard is IDLE
         switch(command){
+        case HWSLOT:
+            // K95 RGB Platinum: the words of a hardware save through hwslot. A save made from hardware mode erases the profile first
+            if(USES_CAPE_FS(kb) && cmd_hwslot_cape(kb, notifynumber, word)){
+                profile = kb->profile;
+                mode = profile->currentmode;
+            }
+            continue;
         case NOTIFYON: {
             // Notification node on
             int notify;
@@ -256,6 +265,15 @@ int readcmd(usbdevice* kb, char* line){
             }
             continue;
         case HWLOAD: case HWSAVE:{
+            if(command == HWSAVE && USES_CAPE_FS(kb)){
+                // The K95 RGB Platinum: a save is a write to the flash of the keyboard, and it is tried once whatever happens, never
+                // again after a reset. The handler reports how it went and returns 0 for every outcome (a failure is for the user to
+                // retry), and its session has ended before it returns, so that the lighting frame that follows cannot come in the
+                // middle of a file (what would be written to the flash as data). Nothing here repeats either.
+                vt->do_io[command](kb, mode, notifynumber, 1, 0);
+                (void)vt->updatergb(kb, 1);
+                continue;
+            }
             // Try to load/save the hardware profile. Reset on failure, disconnect if reset fails.
             TRY_WITH_RESET(vt->do_io[command](kb, mode, notifynumber, 1, 0));
             // Re-send the current RGB state as it sometimes gets scrambled

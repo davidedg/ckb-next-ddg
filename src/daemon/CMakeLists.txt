@@ -61,6 +61,19 @@ if (MACOS OR LINUX)
     target_sources(
         ckb-next-daemon
             PRIVATE
+              cape.c
+              cape_binding.c
+              cape_format.c
+              cape_fw.c
+              cape_hwbind.c
+              cape_hwload.c
+              cape_hwsave.c
+              cape_hwslot.c
+              cape_light.c
+              cape_progress.c
+              cape_slot.c
+              cape_stage.c
+              cape_write.c
               command.c
               device.c
               device_keyboard.c
@@ -84,6 +97,7 @@ if (MACOS OR LINUX)
               main.c
               notify.c
               profile.c
+              profile_cape.c
               profile_keyboard.c
               profile_mouse.c
               usb.c
@@ -93,6 +107,16 @@ if (MACOS OR LINUX)
               bragi_common.c
               bragi_notification.c
               utils.c
+              cape.h
+              cape_binding.h
+              cape_format.h
+              cape_fw.h
+              cape_hwload.h
+              cape_hwsave.h
+              cape_light.h
+              cape_progress.h
+              cape_slot.h
+              cape_write.h
               command.h
               device.h
               devnode.h
@@ -111,6 +135,7 @@ if (MACOS OR LINUX)
               nxp_proto.h
               os.h
               profile.h
+              profile_cape.h
               request_hid_mac.h
               structures.h
               usb.h

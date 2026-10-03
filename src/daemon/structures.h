@@ -151,6 +151,9 @@ typedef struct {
     usbid id[HWMODE_MAX + 1];
     // Profile and mode names
     ushort name[HWMODE_MAX + 1][MD_NAME_LEN];
+    // K95 RGB Platinum only: the lighting of the mode was read and is an image the daemon can report (a slot with an
+    // effect, or one that was not understood, has none: light[] is then not to be sent)
+    uchar lightknown[HWMODE_MAX];
 } hwprofile;
 
 // Keyboard/mouse input tracking
@@ -389,6 +392,11 @@ typedef struct usbdevice_ {
     uchar bragi_in_ep;
     uchar wl_pairing_id[PAIR_ID_SIZE];
     bool needs_fw_update;
+    // K95 RGB Platinum: the on-board profile (CAPE) code may talk to it: --enable-experimental was given and the firmware level
+    // is one that code was verified on (cape_fw.h)
+    bool cape_ok;
+    // K95 RGB Platinum: what hwload read and the slots whose save failed (profile_cape.c), NULL until the first hwload or hwsave
+    struct cape_state* cape;
     enum {
         BRIGHTNESS_SOFTWARE,
         BRIGHTNESS_HARDWARE_FINE,

@@ -6,6 +6,7 @@
 #include "led.h"
 #include "notify.h"
 #include "profile.h"
+#include "profile_cape.h"
 #include "usb.h"
 #include "keymap_patch.h"
 #include <ckbnextconfig.h>
@@ -691,6 +692,8 @@ int usb_tryreset(usbdevice* kb){
 }
 
 // Wrapper around the vtable write() function for error handling and recovery
+// (K95 RGB Platinum: cape_usb_send_once() in profile_cape.c sends a packet of a write to the flash once, with the steps of this function
+// and without its loop: a change of the locking or of the pause here is to be made there too)
 int _usbsend(usbdevice* kb, void* messages, size_t msg_len, int count, const char* file, int line){
     int total_sent = 0;
     for(int i = 0; i < count; i++){

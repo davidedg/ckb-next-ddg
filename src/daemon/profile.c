@@ -3,6 +3,7 @@
 #include "input.h"
 #include "led.h"
 #include "profile.h"
+#include "profile_cape.h"
 #include "stdint.h"
 
 int modeCount = MODE_COUNT_DEFAULT;
@@ -260,6 +261,7 @@ void freeprofile(usbdevice* kb){
     // Also free HW profile
     free(kb->hw);
     kb->hw = 0;
+    cape_device_free(kb);
 }
 
 void hwtonative(usbprofile* profile, hwprofile* hw, int modecount){

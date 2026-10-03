@@ -5,6 +5,8 @@
 #include "led.h"
 #include "notify.h"
 #include "profile.h"
+#include "profile_cape.h"
+#include "cape_hwslot.h"
 #include <ckbnextconfig.h>
 
 // OSX doesn't like putting FIFOs in /dev for some reason
@@ -173,6 +175,9 @@ int _rmnotifynode(usbdevice* kb, int notify){
     // Close FIFO
     close(kb->outfifo[notify] - 1);
     kb->outfifo[notify] = 0;
+    // K95 RGB Platinum: the preparations of hardware saves (hwslot) this node owned end with it
+    if(USES_CAPE_FS(kb))
+        cape_node_closed(kb, notify);
     // Delete node
     int res = remove(outpath);
     return res;
@@ -330,6 +335,9 @@ static int _mkdevpath(usbdevice* kb){
                 fputs(" fwupdate", ffile);
             if(HAS_FEATURES(kb, FEAT_HWLOAD))
                 fputs(" hwload", ffile);
+            // K95 RGB Platinum with --enable-experimental and a tested firmware: the hardware slots through hwslot and get :hwbind (cape_hwslot.h)
+            if(USES_CAPE_FS(kb) && kb->cape_ok)
+                fputs(" " CAPE_HWSLOT_TOKEN, ffile);
             if(HAS_FEATURES(kb, FEAT_DONGLE))
                 fputs(" dongle", ffile);
             if(HAS_FEATURES(kb, FEAT_WIRELESS))

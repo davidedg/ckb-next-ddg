@@ -254,6 +254,10 @@ const char* product_str(ushort product);
 /// Used to apply quirks and features to the PLATINUM devices.
 #define IS_PLATINUM(kb)                 ((kb)->vendor == V_CORSAIR && ((kb)->product == P_K95_PLATINUM))
 
+/// Devices whose hardware profiles are files of the CAPE file system, read and written by profile_cape.c instead of the
+/// legacy commands of profile_keyboard.c. Only the K95 RGB Platinum so far.
+#define USES_CAPE_FS(kb)                IS_PLATINUM(kb)
+
 // Mousepad test
 #define IS_MOUSEPAD(vendor, product)    ((vendor) == (V_CORSAIR) && ((product) == (P_POLARIS) || (product) == (P_MM700)))
 #define IS_MOUSEPAD_DEV(kb)             IS_MOUSEPAD((kb)->vendor, (kb)->product)

@@ -2,6 +2,7 @@
 #include "device.h"
 #include "firmware.h"
 #include "profile.h"
+#include "profile_cape.h"
 #include "usb.h"
 #include "input.h"
 #include "nxp_proto.h"
@@ -166,9 +167,10 @@ int _start_dev(usbdevice* kb, int makeactive){
         kb->features &= ~FEAT_HWLOAD;
 
     ///
-    /// hwload isn't supported yet on this hardware format.
+    /// hwload isn't supported yet on this hardware format. The K95 RGB Platinum is the exception: its profiles are read
+    /// by profile_cape.c, with --enable-experimental and a tested firmware (checked below, once that is known).
     ///
-    if(USES_FILE_HWSAVE(kb))
+    if(USES_FILE_HWSAVE(kb) && !USES_CAPE_FS(kb))
         kb->features &= ~FEAT_HWLOAD;
 
     ///
@@ -192,6 +194,12 @@ int _start_dev(usbdevice* kb, int makeactive){
         kb->active = 1;
         return 0;
     }
+    ///
+    /// - K95 RGB Platinum: decide whether the on-board profile code may talk to it (--enable-experimental, a tested firmware; no traffic).
+    ///
+    cape_device_start(kb);
+    if(USES_CAPE_FS(kb) && !kb->cape_ok)
+        kb->features &= ~FEAT_HWLOAD;
     ///
     /// - Load profile from device if the hw-pointer is not set yet and hw-loading is possible and allowed.
     /// \n return error if mode == 2 (load always) and loading got an error. Else reset HWLOAD feature, because hwload must be 1.

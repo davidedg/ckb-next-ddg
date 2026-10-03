@@ -4,6 +4,7 @@
 #include "led.h"
 #include "notify.h"
 #include "profile.h"
+#include "profile_cape.h"
 #include "command.h"
 
 #include <poll.h>
@@ -183,9 +184,24 @@ static void _cmd_get(usbdevice* kb, usbmode* mode, int nnumber, const char* sett
     } else if(!strcmp(setting, ":hwrgb")){
         // Get the current hardware RGB settings
         HW_STANDARD;
+        // The lighting of an on-board profile of the K95 RGB Platinum is only an image if it is made of static layers.
+        // For the others (an effect, no layers, something not understood) no answer is better than a made-up one: the GUI
+        // keeps what it gets for a hardware mode, and does not ask again while the cookie stays the same.
+        if(USES_CAPE_FS(kb) && !kb->hw->lightknown[index])
+            return;
         char* rgb = printrgb(kb->hw->light + index, kb);
         nprintf(kb, nnumber, mode, "hwrgb %s\n", rgb);
         free(rgb);
+        return;
+    } else if(!strncmp(setting, ":hwbind:", 8)){
+        // K95 RGB Platinum, hwslot: a page of the record of a slot, from the daemon's copy of it (profile_cape.h); no USB
+        if(USES_CAPE_FS(kb))
+            cmd_get_hwbind_cape(kb, nnumber, setting);
+        return;
+    } else if(!strcmp(setting, ":hwsavecheck")){
+        // K95 RGB Platinum: what saving this mode to its on-board slot would do (it reads the slot and writes nothing)
+        if(USES_CAPE_FS(kb))
+            cmd_get_hwsavecheck_cape(kb, mode, nnumber);
         return;
     } else if(!strcmp(setting, ":profilename")){
         // Get the current profile name

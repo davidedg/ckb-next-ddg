@@ -154,9 +154,9 @@ int main(int argc, char** argv){
         if(!strcmp(argv[i], "--help")){
             printf(
 #ifdef OS_MAC_LEGACY
-                        "Usage: ckb-next-daemon [--version] [--gid=<gid>] [--nonotify] [--nobind] [--nomouseaccel] [--nonroot]\n"
+                        "Usage: ckb-next-daemon [--version] [--gid=<gid>] [--nonotify] [--nobind] [--nomouseaccel] [--nonroot] [--enable-experimental]\n"
 #else
-                        "Usage: ckb-next-daemon [--version] [--gid=<gid>] [--nonotify] [--nobind] [--nonroot]\n"
+                        "Usage: ckb-next-daemon [--version] [--gid=<gid>] [--nonotify] [--nobind] [--nonroot] [--enable-experimental]\n"
 #endif
                         "%s\n\n"
                         "Options:\n"
@@ -186,7 +186,11 @@ int main(int argc, char** argv){
                         "        Resend lighting twice on every mode switch. Works around USB KVM\n"
                         "        switches/hubs that occasionally drop or delay a write, which\n"
                         "        otherwise leaves a device showing the previous mode's colors until\n"
-                        "        some other lighting update follows. Not needed on a direct connection.\n",
+                        "        some other lighting update follows. Not needed on a direct connection.\n"
+                        "    --enable-experimental\n"
+                        "        Enables the devices whose support is experimental, and the reading and\n"
+                        "        writing of the on-board (hardware) profiles of the K95 RGB Platinum,\n"
+                        "        which writes to the keyboard's flash memory: read the README first.\n",
                         CKB_NEXT_DESCRIPTION, devpath, MODE_COUNT_DEFAULT);
             return 0;
         } else if (!strcmp(argv[i], "--version")){
