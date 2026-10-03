@@ -23,6 +23,13 @@ public:
     void setLight(KbLight* newLight);
     void setMonochrome();
     void setLegacyM95();
+    // Only the base colours are edited (a mode of the hardware profile of a K95 RGB Platinum: animations are software)
+    void setStaticOnly(bool on, const QString& why);
+    // The keys that show a colour of their own and cannot be selected (KeyWidget::setFixedKeys)
+    void setFixedKeys(const QMap<QString, QColor>& keys, const QString& tip);
+    // The keyboard takes the light's colours again (a slot of a K95 RGB Platinum read while its mode is shown: Kb colours the light
+    // key by key, with no updated() signal, which would also clear the selection)
+    void refreshColours();
 
 private slots:
     void updateLight();

@@ -40,6 +40,23 @@ public:
     void selectAll();
     void clearSelection();
 
+    // Keys that show a colour of their own and cannot be selected (the indicator buttons of a hardware slot of the K95 RGB
+    // Platinum, whose colours are the Performance tab's): the ring of an indicator, tip as their tooltip; an empty map: none
+    void setFixedKeys(const QMap<QString, QColor>& keys, const QString& tip);
+    const QMap<QString, QColor>& fixedKeys() const { return _fixedKeys; }
+    // The colour a key is drawn in with RGB on: the frame of "Show animated" when it has the key, otherwise the colour map's (grey
+    // when monochrome); a fixed key's own colour over both
+    QRgb shownColor(const QString& key) const;
+
+    // Pick mode (the key pickers of a hardware remap of the K95 RGB Platinum): a click picks one key, with no rectangle
+    // and no modifier keys; with toggle, a second click on the key picked takes it back. The proportions are the map's own with
+    // the margin around the keys (no allowance for a keyboard), so what is drawn lines up with the widgets next to it. Off by
+    // default
+    void setPickMode(bool on, bool toggle = false);
+    // Keys drawn faded; in pick mode they cannot be picked (what iCUE does not offer for what is being picked)
+    void setDimmedKeys(const QStringList& keys);
+    const QStringList& dimmedKeys() const { return _dimmedKeys; }
+
     // Set animated keys (highlighted in green)
     void setAnimation(const QStringList& keys);
     void setAnimationToSelection();
@@ -71,6 +88,14 @@ private:
     ColorMap _displayColorMap;
     BindMap _bindMap;
     QSet<QString> _indicators;
+    QMap<QString, QColor> _fixedKeys;
+    QString _fixedTip;
+    bool fixedKey(const char* name) const { return !_fixedKeys.isEmpty() && _fixedKeys.contains(QLatin1String(name)); }
+    QRgb drawnColor(const char* name) const;
+    bool _pickMode = false, _pickToggle = false;
+    QStringList _dimmedKeys;
+    bool dimmedKey(const char* name) const { return !_dimmedKeys.isEmpty() && _dimmedKeys.contains(QLatin1String(name)); }
+    void pick(const QPointF& at);
 
     QBitArray selection;
     QBitArray newSelection;

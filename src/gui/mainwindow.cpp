@@ -352,6 +352,14 @@ void MainWindow::showFwUpdateNotification(QWidget* widget, CkbVersionNumber vers
 }
 
 void MainWindow::closeEvent(QCloseEvent *event){
+    for(KbWidget* widget : kbWidgets){
+        if(widget && widget->device && widget->device->hwFlowBusy()){
+            event->ignore();
+            QMessageBox::information(this, tr("Hardware save in progress"),
+                                     tr("The device is waiting for a hardware-save result. Closing is deferred until the transaction finishes or the device disconnects."));
+            return;
+        }
+    }
     // If the window is hidden already or the event is non-spontaneous (can happen on OSX when using the Quit menu), accept it and close
     if(!event->spontaneous() || isHidden()){
         event->accept();
@@ -390,7 +398,7 @@ void MainWindow::timerTick(){
                     showWindow();
                 else if(option == "Close")
                     // Quit application
-                    qApp->quit();
+                    quitApp();
                 else if(option.startsWith("Device: "))
                     pendingDeviceSerial = option.section(' ', 1).trimmed().toUpper();
                 else if(option.startsWith("SwitchToProfileAt: ")){
@@ -458,6 +466,12 @@ void MainWindow::stateChange(Qt::ApplicationState state){
 }
 
 void MainWindow::quitApp(){
+    for(KbWidget* widget : kbWidgets){
+        if(widget && widget->device && widget->device->hwFlowBusy()){
+            QTimer::singleShot(250, this, &MainWindow::quitApp);
+            return;
+        }
+    }
     qApp->quit();
 }
 

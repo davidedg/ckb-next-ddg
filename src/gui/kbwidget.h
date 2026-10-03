@@ -9,6 +9,8 @@
 #include "modelisttablemodel.h"
 #include "ui_kbwidget.h"
 
+class HwSaveController;
+
 // Central widget for displaying/controlling a device
 
 namespace Ui {
@@ -48,6 +50,22 @@ private:
     QPalette defaultProfileBoxPalette;
 
     KbMode* currentMode;
+    HwSaveController* k95SaveController = nullptr;
+    // hwslot1: the Binding tab of the modes of the hardware profile (ui->hwBindWidget)
+    QString k95ReadText(int slot, const QString& otherwise) const;
+    void showHwBindings();
+    void copyHwBindings(const QStringList& keys);
+    void askK95Conflict(int slot);
+    class MacroReader* k95Recorder = nullptr;
+    void recordHw(bool start);
+    // hwslot1: the lighting of a slot with effects (ui->k95LightBar); the performance settings of a slot (ui->k95PerfWidget)
+    void showHwSlotExtras();
+    void copyHwPerf();
+    void recreateHw(bool on);
+    void replaceHwLights();
+    bool externalControlsEnabled = true;
+    void updateK95SaveButtons();
+    void saveK95(bool all);
 
     const static int GUID = Qt::UserRole;
     const static int NEW_FLAG = Qt::UserRole + 1;
@@ -82,6 +100,7 @@ private slots:
     void devUpdate();
     void updateBattery(uint battery, BatteryStatus charging);
     void on_hwSaveButton_clicked();
+    void on_hwSaveAllButton_clicked();
     void on_tabWidget_currentChanged(int index);
     void on_fwUpdButton_clicked();
     void on_layoutBox_activated(int index);

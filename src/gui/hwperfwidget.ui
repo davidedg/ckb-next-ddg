@@ -1,0 +1,388 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>HwPerfWidget</class>
+ <widget class="QWidget" name="HwPerfWidget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>660</width>
+    <height>520</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string notr="true">Form</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout" stretch="0,1">
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <item>
+    <layout class="QGridLayout" name="gridLayout" columnstretch="0,0,0,0,0,0,0,1" columnminimumwidth="12,170,0,0,0,0,0,0">
+     <property name="horizontalSpacing">
+      <number>8</number>
+     </property>
+     <item row="0" column="0" colspan="8">
+      <widget class="QLabel" name="topRowLabel">
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>23</height>
+        </size>
+       </property>
+       <property name="font">
+        <font>
+         <bold>true</bold>
+        </font>
+       </property>
+       <property name="text">
+        <string>Top row</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="0" colspan="8">
+      <widget class="Line" name="topRowLine">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QLabel" name="profileLabel">
+       <property name="text">
+        <string>Profile:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="2">
+      <widget class="ColorButton" name="profileColor">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>40</height>
+        </size>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+       <property name="iconSize">
+        <size>
+         <width>24</width>
+         <height>24</height>
+        </size>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="1">
+      <widget class="QLabel" name="brightnessLabel">
+       <property name="text">
+        <string>Brightness at 100%:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="2">
+      <widget class="ColorButton" name="brightnessColor">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>40</height>
+        </size>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+       <property name="iconSize">
+        <size>
+         <width>24</width>
+         <height>24</height>
+        </size>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="1">
+      <widget class="QLabel" name="lockLabel">
+       <property name="text">
+        <string>Windows Lock:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="2">
+      <widget class="ColorButton" name="lockColorOn">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>40</height>
+        </size>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+       <property name="iconSize">
+        <size>
+         <width>24</width>
+         <height>24</height>
+        </size>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="3">
+      <widget class="QLabel" name="lockOnLabel">
+       <property name="text">
+        <string>On</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="4">
+      <widget class="ColorButton" name="lockColorOff">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>40</height>
+        </size>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+       <property name="iconSize">
+        <size>
+         <width>24</width>
+         <height>24</height>
+        </size>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="5">
+      <widget class="QLabel" name="lockOffLabel">
+       <property name="text">
+        <string>Off</string>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="0">
+      <spacer name="lockSpacer">
+       <property name="orientation">
+        <enum>Qt::Vertical</enum>
+       </property>
+       <property name="sizeType">
+        <enum>QSizePolicy::Minimum</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>0</width>
+         <height>10</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item row="6" column="0" colspan="8">
+      <widget class="QLabel" name="lockOptionsLabel">
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>23</height>
+        </size>
+       </property>
+       <property name="font">
+        <font>
+         <bold>true</bold>
+        </font>
+       </property>
+       <property name="text">
+        <string>When Lock button is on</string>
+       </property>
+      </widget>
+     </item>
+     <item row="7" column="0" colspan="8">
+      <widget class="Line" name="lockOptionsLine">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+      </widget>
+     </item>
+     <item row="8" column="1" colspan="7">
+      <widget class="QLabel" name="unknownNote">
+       <property name="font">
+        <font>
+         <italic>true</italic>
+        </font>
+       </property>
+       <property name="text">
+        <string>This slot has unknown options, keeping as-is. Use Restore defaults to reset to a known state.</string>
+       </property>
+       <property name="wordWrap">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item row="9" column="1" colspan="6">
+      <widget class="QCheckBox" name="altTabBox">
+       <property name="text">
+        <string>Disable Alt+Tab</string>
+       </property>
+      </widget>
+     </item>
+     <item row="10" column="1" colspan="6">
+      <widget class="QCheckBox" name="altF4Box">
+       <property name="text">
+        <string>Disable Alt+F4</string>
+       </property>
+      </widget>
+     </item>
+     <item row="11" column="1" colspan="6">
+      <widget class="QCheckBox" name="shiftTabBox">
+       <property name="text">
+        <string>Disable Shift+Tab</string>
+       </property>
+      </widget>
+     </item>
+     <item row="12" column="1" colspan="6">
+      <widget class="QCheckBox" name="winKeyBox">
+       <property name="text">
+        <string>Disable Windows/Meta key</string>
+       </property>
+      </widget>
+     </item>
+     <item row="13" column="0">
+      <spacer name="miscSpacer">
+       <property name="orientation">
+        <enum>Qt::Vertical</enum>
+       </property>
+       <property name="sizeType">
+        <enum>QSizePolicy::Minimum</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>0</width>
+         <height>10</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item row="14" column="0" colspan="8">
+      <widget class="QLabel" name="miscLabel">
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>23</height>
+        </size>
+       </property>
+       <property name="font">
+        <font>
+         <bold>true</bold>
+        </font>
+       </property>
+       <property name="text">
+        <string>Miscellaneous</string>
+       </property>
+      </widget>
+     </item>
+     <item row="15" column="0" colspan="8">
+      <widget class="Line" name="miscLine">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+      </widget>
+     </item>
+     <item row="16" column="1" colspan="7">
+      <layout class="QHBoxLayout" name="buttonsLayout" stretch="0,1,0">
+       <item>
+        <widget class="QPushButton" name="copyButton">
+         <property name="text">
+          <string>Copy performance settings to slot...</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="buttonsSpacer">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>0</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item>
+        <widget class="QPushButton" name="restoreButton">
+         <property name="text">
+          <string>Restore defaults</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <spacer name="bottomSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>0</width>
+       <height>0</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ColorButton</class>
+   <extends>QPushButton</extends>
+   <header>colorbutton.h</header>
+  </customwidget>
+ </customwidgets>
+ <tabstops>
+  <tabstop>profileColor</tabstop>
+  <tabstop>brightnessColor</tabstop>
+  <tabstop>lockColorOn</tabstop>
+  <tabstop>lockColorOff</tabstop>
+  <tabstop>altTabBox</tabstop>
+  <tabstop>altF4Box</tabstop>
+  <tabstop>shiftTabBox</tabstop>
+  <tabstop>winKeyBox</tabstop>
+  <tabstop>copyButton</tabstop>
+  <tabstop>restoreButton</tabstop>
+ </tabstops>
+ <resources/>
+ <connections/>
+</ui>

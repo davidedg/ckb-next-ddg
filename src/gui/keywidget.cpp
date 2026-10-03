@@ -125,6 +125,9 @@ void KeyWidget::map(const KeyMap& newMap){
         _aspectRatio -= 0.35;
     else if(keyMap.isMousepad())
         _aspectRatio += 0.35;
+    // (pick mode: the map's own proportions with the margin calculateDrawInfo() keeps)
+    if(_pickMode)
+        _aspectRatio = (keyMap.width() + KEY_SIZE) / float(keyMap.height() + KEY_SIZE);
     update();
     updateGeometry();
 
@@ -256,7 +259,7 @@ bool KeyWidget::event(QEvent* e){
         // Get the name of the key under the cursor
         QRectF keyRect(QPointF(key.x, key.y) - QPointF(key.width, key.height) / 2.f + QPointF(1.f, 1.f), QSize(key.width, key.height) - QSize(2, 2));
         if(keyRect.contains(mouseCurrentScaled)){
-            QToolTip::showText(he->globalPos(), key.friendlyName(false));
+            QToolTip::showText(he->globalPos(), fixedKey(key.name) && !_fixedTip.isEmpty() ? _fixedTip : key.friendlyName(false));
             return true;
         }
     }
@@ -293,6 +296,28 @@ void KeyWidget::displayColorMap(const ColorMap& newDisplayMap, const QSet<QStrin
 #endif
     if(isVisible())
         update();
+}
+
+QRgb KeyWidget::drawnColor(const char* name) const {
+    QRgb color;
+    const QRgb* inDisplay = _displayColorMap.colorForName(name);
+    if(inDisplay)
+        // Color in display map? Grab it from there
+        // (monochrome conversion not necessary as this would have been done by the animation)
+        color = *inDisplay;
+    else {
+        // Otherwise, read from base map
+        color = _colorMap.value(name);
+        if(_monochrome)
+            color = monoRgb(qRed(color), qGreen(color), qBlue(color));
+    }
+    if(fixedKey(name))
+        color = _fixedKeys.value(QLatin1String(name)).rgb();
+    return color;
+}
+
+QRgb KeyWidget::shownColor(const QString& key) const {
+    return drawnColor(key.toLatin1().constData());
 }
 
 void KeyWidget::bindMap(const BindMap& newBindMap){
@@ -384,6 +409,8 @@ void KeyWidget::paintGL(){
                     painter.setOpacity(0.7);
             }
         }
+        if(dimmedKey(key.name))
+            painter.setOpacity(0.35);
         if(((model != KeyMap::STRAFE && model != KeyMap::K95P && model != KeyMap::K100 && model != KeyMap::K70MK2 && model != KeyMap::STRAFE_MK2 && model != KeyMap::K70_TKL && model != KeyMap::K70_PRO) && (!strcmp(key.name, "mr") || !strcmp(key.name, "m1") || !strcmp(key.name, "m2") || !strcmp(key.name, "m3")
                 || !strcmp(key.name, "light") || !strcmp(key.name, "lock") || !strcmp(key.name, "lghtpgm") || (model == KeyMap::K65 && !strcmp(key.name, "mute")))) ||
                 !strcmp(key.name, "ctrlwheelb")){
@@ -516,22 +543,11 @@ void KeyWidget::paintGL(){
                 h = key.height;
             }*/
             // Display a white circle around regular keys, red circle around indicators
-            if(_indicators.contains(key.name))
+            if(_indicators.contains(key.name) || fixedKey(key.name))
                 painter.setPen(QPen(QColor(255, 248, 136), 1.5));
             else
                 painter.setPen(QPen(QColor(255, 255, 255), 1.5));
-            QRgb color;
-            const QRgb* inDisplay = _displayColorMap.colorForName(key.name);
-            if(inDisplay)
-                // Color in display map? Grab it from there
-                // (monochrome conversion not necessary as this would have been done by the animation)
-                color = *inDisplay;
-            else {
-                // Otherwise, read from base map
-                color = _colorMap.value(key.name);
-                if(_monochrome)
-                    color = monoRgb(qRed(color), qGreen(color), qBlue(color));
-            }
+            const QRgb color = drawnColor(key.name);
             painter.setBrush(QBrush(color));
             // Strafe side lights (toggle lights with no animation)
             if(!strcmp(key.name, "lsidel") || !strcmp(key.name, "rsidel")) {
@@ -720,7 +736,9 @@ void KeyWidget::paintGL(){
             else
                 // Remapped key - yellow
                 painter.setPen(yellow);
+            painter.setOpacity(dimmedKey(key.name) ? 0.35 : 1.0);
             painter.drawText(rect, flags, name);
+            painter.setOpacity(1.0);
             font = font0;
         }
 
@@ -766,6 +784,14 @@ void KeyWidget::paintEvent(QPaintEvent* e){
 
 void KeyWidget::mousePressEvent(QMouseEvent* event){
     event->accept();
+    if(_pickMode){
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        pick(event->localPos());
+#else
+        pick(event->position());
+#endif
+        return;
+    }
     mouseDownMode = (event->modifiers() & Qt::AltModifier) ? SUBTRACT : (event->modifiers() & Qt::ShiftModifier) ? ADD : (event->modifiers() & Qt::ControlModifier) ? TOGGLE : SET;
     // See if the event hit a key
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
@@ -782,6 +808,8 @@ void KeyWidget::mousePressEvent(QMouseEvent* event){
             continue;
         QRectF keyRect = getKeyRect(key);
         if(keyRect.contains(mouseDownScaled)){
+            if(fixedKey(key.name))
+                break;
             // Sidelights can't have a color, but they can be toggled
             if(!strcmp(key.name, "lsidel") || !strcmp(key.name, "rsidel")){
                 emit sidelightToggled(); // get the kblightwidget to record it
@@ -839,7 +867,8 @@ void KeyWidget::mouseMoveEvent(QMouseEvent* event){
         // on STRAFE Sidelights and indicators can't be assigned color the way other keys are colored
         if(((keyMap.model() == KeyMap::STRAFE || keyMap.model() == KeyMap::STRAFE_MK2) && (!strcmp(key.name, "lsidel") || !strcmp(key.name, "rsidel")))
                 || (keyMap.model() == KeyMap::M95 && !strcmp(key.name, "back"))
-                || _indicators.contains(key.name)) // FIX: _indicators check fails whenever _indicators is empty because "show animated" is unchecked
+                || _indicators.contains(key.name) // FIX: _indicators check fails whenever _indicators is empty because "show animated" is unchecked
+                || fixedKey(key.name))
             continue;
         if(mouseHighlightRectScaled.intersects(keyRect))
             newSelection.setBit(i);
@@ -886,15 +915,76 @@ void KeyWidget::mouseReleaseEvent(QMouseEvent* event){
 void KeyWidget::setSelection(const QStringList& keys){
     selection.fill(false);
     QStringList allNames = keyMap.keys();
+    QStringList selected;
     foreach(const QString& key, keys){
         int index = allNames.indexOf(key);
+        if(_fixedKeys.contains(key))
+            continue;
         if(index >= 0)
             selection.setBit(index);
+        selected << key;
     }
     newSelection.fill(false);
     mouseDownMode = NONE;
     update();
-    emit selectionChanged(keys);
+    emit selectionChanged(selected);
+}
+
+void KeyWidget::setFixedKeys(const QMap<QString, QColor>& keys, const QString& tip){
+    _fixedKeys = keys;
+    _fixedTip = tip;
+    // a fixed key is not selected
+    QStringList allNames = keyMap.keys();
+    bool dropped = false;
+    for(auto it = keys.cbegin(); it != keys.cend(); ++it){
+        const int index = allNames.indexOf(it.key());
+        if(index >= 0 && selection.testBit(index)){
+            selection.clearBit(index);
+            dropped = true;
+        }
+    }
+    if(dropped){
+        QStringList selectedNames;
+        for(int i = 0; i < allNames.size(); ++i)
+            if(selection.testBit(i))
+                selectedNames << allNames[i];
+        emit selectionChanged(selectedNames);
+    }
+    update();
+}
+
+void KeyWidget::setPickMode(bool on, bool toggle){
+    _pickMode = on;
+    _pickToggle = on && toggle;
+    newSelection.fill(false);
+    mouseDownMode = NONE;
+    mouseHighlightRect = QRectF();
+    map(keyMap);            // the proportions of the mode
+}
+
+void KeyWidget::setDimmedKeys(const QStringList& keys){
+    _dimmedKeys = keys;
+    update();
+}
+
+void KeyWidget::pick(const QPointF& at){
+    // The key under the click, if it can be picked: it alone is the selection, or none when it was the one picked (toggle)
+    const QPointF scaled = at / drawInfoScale - drawInfoOffset;
+    int i = -1;
+    for(const Key& key : keyMap){
+        i++;
+        if((_rgbMode && !key.hasLed) || (!_rgbMode && !key.hasScan) || !getKeyRect(key).contains(scaled))
+            continue;
+        if(fixedKey(key.name) || dimmedKey(key.name))
+            return;
+        const bool again = selection.testBit(i) && selection.count(true) == 1;
+        selection.fill(false);
+        if(!(again && _pickToggle))
+            selection.setBit(i);
+        emit selectionChanged(selection.testBit(i) ? QStringList(key.name) : QStringList());
+        update();
+        return;
+    }
 }
 
 void KeyWidget::selectAll(){
@@ -904,7 +994,7 @@ void KeyWidget::selectAll(){
     QStringList selectedNames;
     foreach(const Key& key, keyMap.positions()){
         // Sidelights can't be selected, neither can the back LED for the M95
-        if(strcmp(key.name, "lsidel") && strcmp(key.name, "rsidel") && keyMap.model() != KeyMap::M95
+        if(strcmp(key.name, "lsidel") && strcmp(key.name, "rsidel") && keyMap.model() != KeyMap::M95 && !fixedKey(key.name)
            && ((_rgbMode && key.hasLed) || !(_rgbMode && key.hasScan))){
             selection.setBit(i);
             selectedNames << key.name;

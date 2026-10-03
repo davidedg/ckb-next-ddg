@@ -144,6 +144,27 @@ if (MACOS OR LINUX)
               gradientbutton.cpp
               gradientdialog.cpp
               gradientdialogwidget.cpp
+              hwsaveflow.cpp
+              hwsavecontroller.cpp
+              hwsavedevice.h
+              kbhwsavedevice.cpp
+              hwcachebatch.cpp
+              hwsavepipe.cpp
+              k95psnapshot.cpp
+              k95pstage.cpp
+              hwbinding.cpp
+              hwslotdraft.cpp
+              hwbindedit.cpp
+              hwbindwidget.cpp
+              hwbindwidget.h
+              hwbindwidgetparts.h
+              hwperfwidget.cpp
+              hwperfwidget.h
+              hwpickermap.cpp
+              hwpickermap.h
+              hwtextshape.cpp
+              k95pkeytable.cpp
+              k95pkeydata.h
               idletimer.cpp
               kbanim.cpp
               kbanimwidget.cpp
@@ -255,6 +276,8 @@ if (MACOS OR LINUX)
               extrasettingswidget.ui
               fwupgradedialog.ui
               gradientdialog.ui
+              hwbindwidget.ui
+              hwperfwidget.ui
               kbanimwidget.ui
               kbbindwidget.ui
               kblightwidget.ui
@@ -284,6 +307,20 @@ elseif (LINUX)
                 PRIVATE
                     USE_LIBPULSE)
     endif ()
+
+    # K95 RGB Platinum: a new hardware Text is converted with the layout of the device (hwtextxkb.cpp)
+    if (USE_XKBCOMMON)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(XKBCOMMON xkbcommon>=0.5)
+        if(XKBCOMMON_FOUND)
+            target_sources(ckb-next PRIVATE hwtextxkb.cpp hwtextxkb.h)
+            target_include_directories(ckb-next PRIVATE ${XKBCOMMON_INCLUDE_DIRS})
+            target_link_libraries(ckb-next PRIVATE ${XKBCOMMON_LIBRARIES})
+            target_compile_definitions(ckb-next PRIVATE USE_XKBCOMMON)
+        else()
+            message(FATAL_ERROR "libxkbcommon (0.5 or newer) was not found. Either install it or pass -DUSE_XKBCOMMON=OFF to disable the new hardware Text of the K95 RGB Platinum.")
+        endif()
+    endif()
 
     if (USE_XCB)
         find_package(PkgConfig REQUIRED)

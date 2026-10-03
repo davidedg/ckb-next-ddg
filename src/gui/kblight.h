@@ -84,6 +84,9 @@ public:
     // Used to force a frame to be sent to the daemon
     // Needed for when switching profiles as the daemon wipes the old data on switch
     void forceFrameUpdate();
+    // Only the GUI's preview of the base colours, nothing for the daemon (the hardware profile of the slots: the keyboard
+    // shows its own slot)
+    void previewBase();
 
     int timerDimRestore();
     void timerDim();
@@ -98,7 +101,7 @@ private:
     KbAnim*         _previewAnim;
     KeyMap          _map;
     QColorMap       _qColorMap;
-    ColorMap        _colorMap, _animMap, _lastFrameAnimMap, _indicatorMap, _lastFrameIndicatorMap;
+    ColorMap        _colorMap, _animMap, _lastFrameAnimMap, _indicatorMap, _lastFrameIndicatorMap, _lastPreviewMap;
     QSet<QString>   _indicatorList;
     quint64         lastFrameSignal;
     int             _dimming, _lastFrameDimming, _timerOrigDimming;

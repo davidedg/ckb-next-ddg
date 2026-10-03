@@ -211,6 +211,24 @@ void KbLightWidget::on_animButton_clicked(){
     light->restartAnimation();
 }
 
+void KbLightWidget::setStaticOnly(bool on, const QString& why){
+    // off: back to the state the constructor gives (no animation scripts installed = no New animation)
+    ui->animButton->setEnabled(!on && AnimScript::count() != 0);
+    ui->animWidget->setEnabled(!on);
+    ui->showAnimBox->setEnabled(!on);
+    ui->animButton->setToolTip(on ? why : QString());
+    ui->animWidget->setToolTip(on ? why : QString());
+}
+
+void KbLightWidget::setFixedKeys(const QMap<QString, QColor>& keys, const QString& tip){
+    keyWidget->setFixedKeys(keys, tip);
+}
+
+void KbLightWidget::refreshColours(){
+    if(light)
+        keyWidget->colorMap(light->colorMap());
+}
+
 void KbLightWidget::setLegacyM95(){
     ui->animButton->setEnabled(false);
     ui->bgButton->setEnabled(false);

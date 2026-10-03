@@ -17,6 +17,14 @@
 #include "mainwindow.h"
 #include <QItemSelectionModel>
 #include "modelisttablemodel.h"
+#include "hwsavecontroller.h"
+#include "kbhwsavedevice.h"
+#include "hwbindwidget.h"
+#include "hwperfwidget.h"
+#include "k95pkeytable.h"
+#include "modeselectdialog.h"
+#include "macroreader.h"
+#include <QPushButton>
 
 KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector) :
     QWidget(parent),
@@ -25,6 +33,81 @@ KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector
     prevmode(nullptr)
 {
     ui->setupUi(this);
+    // The widgets of the slots of a K95P's hardware profile (hwslot1): shown by showHwBindings() and showHwSlotExtras()
+    ui->hwBindWidget->hide();
+    ui->k95LightBar->hide();
+    ui->k95PerfPanel->hide();   // what the tab says of the slot (not read, cannot be saved as it is...)
+    ui->k95PerfWidget->hide();
+    if(device->k95Onboard()){
+        k95SaveController = new HwSaveController(new KbHwSaveDevice(device, this), this);
+        ui->hwSaveButton->setText(tr("Save selected slot to hardware"));
+        connect(k95SaveController, &HwSaveController::busyChanged, this, [this](bool busy){
+            const bool enabled = !busy && externalControlsEnabled;
+            ui->tabWidget->setEnabled(enabled);
+            ui->profileBox->setEnabled(enabled);
+            ui->modesList->setEnabled(enabled);
+            ui->bindWidget->setControlsEnabled(enabled);
+            if(device->k95HwSlots()) ui->hwBindWidget->setControlsEnabled(enabled);
+            updateK95SaveButtons();
+        });
+        connect(device, &Kb::k95CacheFinished, this, [this](bool){ updateK95SaveButtons(); });
+        connect(device, &Kb::profileChanged, this, [this](){ updateK95SaveButtons(); });
+        connect(device, &Kb::modeChanged, this, [this](){ updateK95SaveButtons(); });
+        if(device->k95HwSlots()){
+            // hwslot1: the modes of the hardware profile have their own Binding tab (the bindings of the slot's draft)
+            connect(ui->hwBindWidget, &HwBindWidget::draftChanged, this, [this](){
+                device->k95DraftChanged(device->currentProfile()->indexOf(device->currentMode()));
+            });
+            connect(ui->hwBindWidget, &HwBindWidget::copyRequested, this, &KbWidget::copyHwBindings);
+            connect(ui->hwBindWidget, &HwBindWidget::recordRequested, this, &KbWidget::recordHw);
+            connect(ui->hwBindWidget, &HwBindWidget::recreateRequested, this, &KbWidget::recreateHw);
+            // Above the lighting: a slot's effects are kept, unless replaced with static colours
+            connect(ui->k95LightButton, &QPushButton::clicked, this, &KbWidget::replaceHwLights);
+            // The performance settings of a slot, instead of the software ones (the Performance HW tab), and what it says of the slot
+            auto currentSlot = [this](){
+                KbProfile* profile = device->currentProfile();
+                return profile && device->isHwSlotProfile(profile) ? profile->indexOf(device->currentMode()) : -1;
+            };
+            connect(ui->k95PerfWidget, &HwPerfWidget::perfChanged, this, [this, currentSlot](const HwSlotDraft::Perf& perf){
+                device->k95SetPerf(currentSlot(), perf);
+                showHwSlotExtras();
+            });
+            connect(ui->k95PerfWidget, &HwPerfWidget::restoreRequested, this, [this, currentSlot](){
+                device->k95RestorePerfDefaults(currentSlot());
+                showHwSlotExtras();
+            });
+            connect(ui->k95PerfWidget, &HwPerfWidget::copyRequested, this, &KbWidget::copyHwPerf);
+            connect(device, &Kb::k95Note, this, [this](const QString& text){
+                QMessageBox::information(this, tr("Copy performance settings"), text);
+            });
+            connect(device, &Kb::k95RecordingChanged, this, [this](bool recording){
+                // Nothing else changes while the recorder runs: the profile, the mode, a save
+                const bool enabled = !recording && externalControlsEnabled && !device->hwFlowBusy();
+                ui->tabWidget->tabBar()->setEnabled(enabled);
+                ui->profileBox->setEnabled(enabled);
+                ui->modesList->setEnabled(enabled);
+                updateK95SaveButtons();
+                if(!recording && k95Recorder){
+                    delete k95Recorder;
+                    k95Recorder = nullptr;
+                    ui->hwBindWidget->setRecording(false);
+                }
+            });
+            connect(device, &Kb::k95CacheFinished, this, [this](bool){ showHwBindings(); });
+            // The read of a slot on demand: the editor of that slot when it is the one shown (another slot's progress leaves it alone)
+            connect(device, &Kb::k95SlotReadChanged, this, [this](int slot){
+                KbProfile* profile = device->currentProfile();
+                if(profile && device->isHwSlotProfile(profile) && profile->indexOf(device->currentMode()) == slot)
+                    showHwBindings();
+                else if(profile && device->isHwSlotProfile(profile))
+                    showHwSlotExtras();   // (a copy of the performance settings may wait for that slot: the tab says it)
+                updateK95SaveButtons();
+            });
+            connect(device, &Kb::k95DraftConflict, this, &KbWidget::askK95Conflict);
+        }
+    } else {
+        ui->hwSaveAllButton->hide();
+    }
     defaultProfileBoxPalette = ui->profileBox->palette();
     Q_ASSERT(ui->pollRateBox->count() == Kb::POLLRATE_COUNT);
     ui->modesList->setDevice(device);
@@ -122,10 +205,14 @@ KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector
     if(device->monochrome)
         ui->lightWidget->setMonochrome();
     // Disable Save to hardware button for unsupported devices
-    if(!device->hwload){
+    if(!device->hwSaveAllowed()){
         ui->hwSaveButton->setDisabled(true);
-        ui->hwSaveButton->setToolTip(QString(tr("Saving to hardware is not supported on this device.")));
+        ui->hwSaveButton->setToolTip(device->model() == KeyMap::K95P && !device->k95Onboard() && device->k95FirmwareTested() ?
+                                     tr("For this device, saving to hardware requires ckb-next-daemon started with --enable-experimental.") :
+                                     device->hwload ? tr("Saving to hardware is not supported yet on this device.")
+                                                    : tr("Saving to hardware is not supported on this device."));
     }
+    updateK95SaveButtons();
     // Read device layout
     if(device->features.contains("bind")){
         // Clear the "Default" value
@@ -238,6 +325,7 @@ void KbWidget::updateProfileList(){
 }
 
 void KbWidget::on_profileBox_activated(int index){
+    if(device->hwFlowBusy() || device->k95Recording()) return;
     if(index < 0)
         return;
     if(index >= device->profiles().count()){
@@ -262,15 +350,26 @@ void KbWidget::modeChanged(){
     ui->bindWidget->setBind(device->currentBind(), device->currentProfile());
     ui->kPerfWidget->setPerf(device->currentPerf(), device->currentProfile());
     ui->mPerfWidget->setPerf(device->currentPerf(), device->currentProfile());
+    if(device->k95HwSlots()){
+        // hwslot1: the lighting of a slot is narrowed and the performance settings of the slots (Win Lock options, indicator colours)
+        // are only shown by showHwSlotExtras()
+        ui->lightWidget->setEnabled(true);
+        ui->kPerfWidget->setEnabled(!device->isHwSlotProfile(device->currentProfile()));
+        // In hardware mode the daemon ignores the poll rate
+        ui->pollRateBox->setEnabled(!device->isHwSlotProfile(device->currentProfile()));
+        showHwBindings();
+    }
     // Update selection
     ui->modesList->setCurrentIndex(ui->modesList->model()->index(index, 0));
     currentMode = device->currentMode();
 }
 
 void KbWidget::currentSelectionChanged(const QModelIndex& current, const QModelIndex& previous){
+    if(device->hwFlowBusy() || device->k95Recording()) return;
     if(current.row() > device->currentProfile()->modeCount() - 1){
         const int row = dynamic_cast<ModeListTableModel*>(ui->modesList->model())->addNewMode();
-        ui->modesList->edit(ui->modesList->model()->index(row, ModeListTableModel::COL_MODE_NAME));
+        if(row >= 0)
+            ui->modesList->edit(ui->modesList->model()->index(row, ModeListTableModel::COL_MODE_NAME));
         return;
     }
     KbMode* mode = device->currentProfile()->at(current.row());
@@ -296,6 +395,7 @@ void KbWidget::batteryTrayBox_stateChanged(int state){
 }
 
 void KbWidget::on_modesList_customContextMenuRequested(const QPoint& pos){
+    if(device->hwFlowBusy() || device->k95Recording()) return;
     QModelIndex idx = ui->modesList->indexAt(pos);
     KbProfile* currentProfile = device->currentProfile();
     if(!idx.isValid() || !currentMode || idx.row() > currentProfile->modeCount() - 1)
@@ -310,18 +410,22 @@ void KbWidget::on_modesList_customContextMenuRequested(const QPoint& pos){
     QAction* rename = new QAction(tr("Rename..."), this);
     QAction* duplicate = new QAction(tr("Duplicate"), this);
     QAction* del = new QAction(tr("Delete"), this);
-    bool canDelete = (device->currentProfile()->modeCount() > device->hwModeCount);
+    const bool canDelete = device->canDeleteMode(currentProfile);
     if(!canDelete)
         // Can't delete modes if they're required by hardware
         del->setEnabled(false);
+    // hwslot1: the hardware profile is the three slots
+    const bool canAdd = device->canAddMode(currentProfile), canMove = device->canMoveModes(currentProfile);
+    duplicate->setEnabled(canAdd);
     QAction* moveup = new QAction(tr("Move Up"), this);
 #ifdef USE_XCB_EWMH
     QAction* focusevts = new QAction(tr("Manage Events"), this);
+    focusevts->setEnabled(!device->isHwSlotProfile(currentProfile));
 #endif
-    if(row == 0)
+    if(row == 0 || !canMove)
         moveup->setEnabled(false);
     QAction* movedown = new QAction(tr("Move Down"), this);
-    if(row >= currentProfile->modeCount() - 1)
+    if(row >= currentProfile->modeCount() - 1 || !canMove)
         movedown->setEnabled(false);
     menu.addAction(rename);
     menu.addAction(duplicate);
@@ -336,6 +440,8 @@ void KbWidget::on_modesList_customContextMenuRequested(const QPoint& pos){
     ui->modesList->setIgnoreFocusLoss(true);
     QAction* result = menu.exec(QCursor::pos());
     ui->modesList->setIgnoreFocusLoss(false);
+    if(!result || !result->isEnabled())
+        return;
     if(result == rename){
         ui->modesList->edit(ui->modesList->model()->index(idx.row(), ModeListTableModel::COL_MODE_NAME, idx.parent()));
     } else if(result == duplicate){
@@ -419,11 +525,71 @@ void KbWidget::updateBattery(uint battery, BatteryStatus charging){
 }
 
 void KbWidget::on_hwSaveButton_clicked(){
+    if(device->k95Onboard()){ saveK95(false); return; }
     profileAboutToChange();
     device->save();
     device->hwSave();
     updateProfileList();
     profileChanged();
+}
+
+void KbWidget::on_hwSaveAllButton_clicked(){
+    saveK95(true);
+}
+
+void KbWidget::updateK95SaveButtons(){
+    if(!device->k95Onboard()) return;
+    const bool eligible = externalControlsEnabled && !device->k95Recording() && device->hwSaveAllowed() && device->k95CacheIsReady() &&
+        device->currentProfile() && device->currentProfile() == device->hwProfile() &&
+        device->currentProfile()->modeCount() >= 3 && !device->hwFlowBusy() && !device->k95Reading() &&
+        (!k95SaveController || !k95SaveController->busy())
+        && !device->k95CopyPending();
+    const int current = device->currentProfile() && device->currentMode() ? device->currentProfile()->indexOf(device->currentMode()) : -1;
+    // Save slot needs the slot read from the keyboard (its mode was opened); Save ALL leaves out the slots not read and not changed
+    const bool currentRead = current >= 0 && current < 3 && device->k95ReadState(current) == Kb::K95_READ;
+    ui->hwSaveAllButton->setEnabled(eligible);
+    ui->hwSaveButton->setEnabled(eligible && currentRead);
+    int reading = -1;
+    for(int i = 0; i < 3; ++i)
+        if(device->k95ReadState(i) == Kb::K95_READING) reading = i;
+    const QString unavailable = device->k95CopyPending() ?
+        tr("A copy of the performance settings is waiting for a slot to be read from the keyboard.") :
+        device->k95Reading() && reading >= 0 ?
+        tr("M%1 is being read from the keyboard: wait for it to finish.").arg(reading + 1) :
+        !device->k95FirmwareTested() ?
+        tr("Hardware saving is available only for K95 Platinum firmware 3.29 / bootloader 3.03.") :
+        !device->k95HwSlots() ?
+        tr("Hardware saving needs a ckb-next daemon that supports the hardware slots of this keyboard (hwslot1).") :
+        !device->k95CacheIsReady() ?
+        tr("Hardware slots are still loading or their state could not be verified.") :
+        tr("Select M1, M2 or M3 in the hardware profile to save.");
+    ui->hwSaveButton->setToolTip(eligible && currentRead ? tr("Save the selected hardware slot.") :
+                                 eligible ? tr("The slot is not read from the keyboard yet.") : unavailable);
+    ui->hwSaveAllButton->setToolTip(eligible ? tr("Check all three hardware slots, then save eligible changes.") : unavailable);
+}
+
+void KbWidget::saveK95(bool all){
+    updateK95SaveButtons();
+    if(!externalControlsEnabled || !k95SaveController || !device->hwSaveAllowed() || !device->k95CacheIsReady() ||
+       device->currentProfile() != device->hwProfile() || device->hwFlowBusy()) return;
+    KbProfile* profile = device->currentProfile();
+    if(!profile || profile->modeCount() < 3) return;
+    const int selected = profile->indexOf(device->currentMode());
+    if(!all && (selected < 0 || selected >= 3)) return;
+    // hwslot1: the lines of each slot's transaction (the hwsave route is closed)
+    std::vector<HwSaveFlow::Slot> saveSlots;
+    std::array<bool, 3> rgbRequired{{false, false, false}};
+    QString why;
+    if(!device->k95SaveSlots(all, selected, saveSlots, rgbRequired, why)){
+        QMessageBox::warning(this, tr("Hardware save unavailable"), why);
+        return;
+    }
+    if(!k95SaveController->start(saveSlots, all, rgbRequired)){
+        QMessageBox::warning(this, tr("Hardware save unavailable"),
+                             tr("The device is busy or its hardware cache is not ready."));
+        return;
+    }
+    updateK95SaveButtons();
 }
 
 void KbWidget::on_tabWidget_currentChanged(int index){
@@ -449,14 +615,273 @@ void KbWidget::updateFwButton(){
 }
 
 void KbWidget::setTabBarEnabled(const bool e){
-    ui->tabWidget->tabBar()->setEnabled(e);
-    ui->profileBox->setEnabled(e);
-    ui->modesList->setEnabled(e);
-    ui->hwSaveButton->setEnabled(e);
-    ui->bindWidget->setControlsEnabled(e);
+    externalControlsEnabled = e;
+    const bool enabled = e && !device->hwFlowBusy();
+    ui->tabWidget->tabBar()->setEnabled(enabled);
+    ui->profileBox->setEnabled(enabled);
+    ui->modesList->setEnabled(enabled);
+    ui->hwSaveButton->setEnabled(enabled);
+    if(device->k95Onboard()) updateK95SaveButtons();
+    ui->bindWidget->setControlsEnabled(enabled);
+    if(device->k95HwSlots()) ui->hwBindWidget->setControlsEnabled(enabled);
+}
+
+void KbWidget::recordHw(bool start){
+    if(!device->k95HwSlots())
+        return;
+    if(!start){
+        device->k95StopRecording();   // k95RecordingChanged(false) closes the reader
+        return;
+    }
+    if(k95Recorder || !device->k95StartRecording())
+        return;
+    k95Recorder = new MacroReader(QStringList{device->getMacroPath()});
+    connect(k95Recorder, &MacroReader::macroLineRead, ui->hwBindWidget, &HwBindWidget::recordedEvent);
+    ui->hwBindWidget->setRecording(true);
+}
+
+QString KbWidget::k95ReadText(int slot, const QString& otherwise) const {
+    // What the read of the slot on demand is doing, in the labels that say why the slot is not shown
+    switch(device->k95ReadState(slot)){
+    case Kb::K95_QUEUED:
+        return tr("M%1 will be read from the keyboard after the slot being read now.").arg(slot + 1);
+    case Kb::K95_READING:
+        return tr("Reading M%1 from the keyboard\u2026 %2 %").arg(slot + 1).arg(device->k95ReadDone(slot) / 10);
+    case Kb::K95_FAILED:
+        return tr("M%1 could not be read from the keyboard (%2). Select another mode and then this one again to try again.")
+            .arg(slot + 1).arg(device->k95ReadError(slot));
+    default:
+        return otherwise;
+    }
+}
+
+void KbWidget::showHwBindings(){
+    if(!device->k95HwSlots() || device->k95Recording())
+        return;
+    KbProfile* profile = device->currentProfile();
+    const int slot = profile ? profile->indexOf(device->currentMode()) : -1;
+    const bool hw = device->isHwSlotProfile(profile) && slot >= 0 && slot < 3;
+    ui->bindWidget->setVisible(!hw);
+    ui->hwBindWidget->setVisible(hw);
+    if(!hw){
+        // Lighting and Performance go back to the software ones too (they stayed "hardware slot" after leaving the HW profile)
+        showHwSlotExtras();
+        return;
+    }
+    const HwBinding::Record* base = device->k95SlotRecord(slot);
+    HwSlotDraft::Draft* draft = device->k95Draft(slot);
+    QString why;
+    bool editable = false, offerRecreate = false;
+    if(!device->k95CacheIsReady() || !base)
+        why = k95ReadText(slot, tr("The bindings of this slot are still loading, or could not be read from the keyboard."));
+    else if(draft && draft->conflict)
+        why = tr("This slot changed on the keyboard after you edited it: reload it or keep your changes first.");
+    else if(base->readonly)
+        why = tr("This slot cannot be rewritten: %1").arg(QString::fromStdString(base->readonlyWhy));
+    else if(base->state == HwBinding::Record::RAW || base->state == HwBinding::Record::BROKEN){
+        offerRecreate = true;
+        editable = draft && draft->recreate;
+        why = editable ? tr("The bindings of this slot are recreated from scratch: the slot's own are replaced when it is saved.")
+                       : tr("The bindings of this slot are not in a form ckb-next can edit, and are kept as they are: %1")
+                             .arg(QString::fromStdString(base->reason));
+    } else {
+        editable = true;
+        if(device->k95SlotEmpty(slot))
+            why = tr("This slot is empty: saving it makes a new hardware profile in it.");
+    }
+    ui->hwBindWidget->setSlot(base, draft, profile->keyMap(), KeyMap::getLayout(device->getCurrentLayout()), editable, why);
+    ui->hwBindWidget->setRecreate(offerRecreate, draft && draft->recreate);
+    ui->hwBindWidget->setControlsEnabled(externalControlsEnabled && !device->hwFlowBusy());
+    showHwSlotExtras();
+}
+
+void KbWidget::showHwSlotExtras(){
+    if(!device->k95HwSlots())
+        return;
+    KbProfile* profile = device->currentProfile();
+    const int slot = profile ? profile->indexOf(device->currentMode()) : -1;
+    const bool hw = device->isHwSlotProfile(profile) && slot >= 0 && slot < 3;
+    const HwBinding::Record* base = hw ? device->k95SlotRecord(slot) : nullptr;
+    HwSlotDraft::Draft* draft = hw ? device->k95Draft(slot) : nullptr;
+    // Lighting: the colours are edited where they are an image, or once the user chose to replace the effects with them
+    const bool effects = base && (base->light == HwBinding::Record::EFFECTS || base->light == HwBinding::Record::UNKNOWN);
+    const bool replacing = effects && draft && draft->replaceLights;
+    // A slot not read yet (or being read, or failed) says so here too: the GUI opens on this tab
+    ui->k95LightBar->setVisible(hw && (effects || !base));
+    ui->k95LightButton->setVisible(effects);
+    if(hw && !base)
+        ui->k95LightLabel->setText(k95ReadText(slot, tr("The lighting of this slot is still loading, or could not be read from the keyboard.")));
+    if(effects){
+        ui->k95LightLabel->setText(replacing ?
+            tr("The lighting effects of this slot will be replaced with the static colours below when it is saved.") :
+            tr("This slot has lighting effects: they are kept as they are (the preview here does not show them)."));
+        ui->k95LightButton->setText(replacing ? tr("Keep the effects") : tr("Replace with static colours..."));
+        ui->k95LightButton->setEnabled(!base->readonly && externalControlsEnabled && !device->hwFlowBusy());
+    }
+    if(hw){
+        ui->lightWidget->setEnabled(base && !base->readonly && (!effects || replacing));
+        ui->lightWidget->refreshColours();   // (the slot may have been read while it was shown)
+    }
+    ui->lightWidget->setStaticOnly(hw, tr("A hardware slot has static colours only: animations run in software."));
+    // The indicator buttons in Lighting: the colours of the performance settings, not paintable
+    QMap<QString, QColor> fixed;
+    if(hw){
+        const HwSlotDraft::Perf perf = device->k95Perf(slot);
+        const QColor profileColour(perf.indicators[0], perf.indicators[1], perf.indicators[2]);
+        const QColor brightness(perf.indicators[3], perf.indicators[4], perf.indicators[5]);
+        const QColor lockOff(perf.indicators[9], perf.indicators[10], perf.indicators[11]);   // the Win Lock button at rest
+        const KeyMap map = profile->keyMap();
+        for(const char* name : {"profswitch", "logo"})
+            if(map.contains(name) && map.key(name).hasLed) fixed[name] = profileColour;
+        if(map.contains("light")) fixed["light"] = brightness;
+        if(map.contains("lock")) fixed["lock"] = lockOff;
+    }
+    ui->lightWidget->setFixedKeys(fixed, tr("Set in Performance tab"));
+    // Performance: the Performance HW tab
+    ui->kPerfWidget->setVisible(!hw);
+    if(!hw){
+        ui->k95PerfPanel->hide();
+        ui->k95PerfWidget->hide();
+        return;
+    }
+    if(!base){
+        ui->k95PerfPanel->setText(k95ReadText(slot, tr("The performance settings of this slot are still loading, or could not be read.")));
+        ui->k95PerfPanel->show();
+        ui->k95PerfWidget->hide();
+        return;
+    }
+    QStringList notes;
+    bool editable = externalControlsEnabled && !device->hwFlowBusy() && !device->k95Recording() && draft;
+    if(base->readonly){
+        notes << tr("This slot cannot be rewritten: %1").arg(QString::fromStdString(base->readonlyWhy));
+        editable = false;
+    } else if(draft && draft->conflict){
+        notes << tr("This slot changed on the keyboard after you edited it: reload it or keep your changes first.");
+        editable = false;
+    } else if(base->state == HwBinding::Record::BROKEN && !(draft && draft->recreate))
+        notes << tr("Saving this slot needs \"Recreate the bindings from scratch...\" in the Binding tab.");
+    for(int i = 0; i < 3; ++i)
+        if(device->k95CopyPendingFor(i))
+            notes << (device->k95ReadState(i) == Kb::K95_READING ?
+                      tr("Copying to M%1: reading it from the keyboard\u2026 %2 %").arg(i + 1).arg(device->k95ReadDone(i) / 10) :
+                      tr("Copying to M%1: it will be read from the keyboard first.").arg(i + 1));
+    ui->k95PerfPanel->setText(notes.join("\n"));
+    ui->k95PerfPanel->setVisible(!notes.isEmpty());
+    ui->k95PerfWidget->setPerf(device->k95Perf(slot));
+    ui->k95PerfWidget->setEditable(editable);
+    ui->k95PerfWidget->setCopyEnabled(externalControlsEnabled && !device->hwFlowBusy() && !device->k95Recording());
+    ui->k95PerfWidget->show();
+}
+
+void KbWidget::copyHwPerf(){
+    KbProfile* profile = device->currentProfile();
+    const int from = profile ? profile->indexOf(device->currentMode()) : -1;
+    if(!device->isHwSlotProfile(profile) || from < 0 || from > 2)
+        return;
+    // To the other hardware slots, whatever they are: one not read is read first, one that cannot be rewritten is said
+    QList<KbMode*> targets;
+    for(int i = 0; i < 3; ++i)
+        if(i != from)
+            targets.append(profile->at(i));
+    ModeSelectDialog dialog(this, device->currentMode(), targets, tr("Copy performance settings to:"));
+    if(dialog.exec() != QDialog::Accepted)
+        return;
+    std::vector<int> to;
+    for(KbMode* mode : dialog.selection())
+        to.push_back(profile->indexOf(mode));
+    device->k95CopyPerf(from, to);
+    showHwSlotExtras();
+    updateK95SaveButtons();
+}
+
+void KbWidget::recreateHw(bool on){
+    KbProfile* profile = device->currentProfile();
+    const int slot = profile ? profile->indexOf(device->currentMode()) : -1;
+    if(on && QMessageBox::warning(this, tr("Recreate the bindings"),
+            tr("The bindings of M%1 are not in a form ckb-next can edit. Recreating them starts from no bindings at all: "
+               "when the slot is saved, every remap and macro it has now is replaced.\n\nRecreate them?").arg(slot + 1),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        return;
+    device->k95Recreate(slot, on);
+    showHwBindings();
+}
+
+void KbWidget::replaceHwLights(){
+    KbProfile* profile = device->currentProfile();
+    const int slot = profile ? profile->indexOf(device->currentMode()) : -1;
+    HwSlotDraft::Draft* draft = device->k95Draft(slot);
+    if(!draft)
+        return;
+    const bool on = !draft->replaceLights;
+    if(on && QMessageBox::warning(this, tr("Replace the lighting effects"),
+            tr("M%1 has lighting effects that ckb-next cannot edit. Replacing them writes the static colours of the Lighting tab "
+               "instead when the slot is saved: the effects are lost.\n\nReplace them?").arg(slot + 1),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        return;
+    device->k95ReplaceLights(slot, on);
+    showHwSlotExtras();
+}
+
+void KbWidget::copyHwBindings(const QStringList& keys){
+    KbProfile* profile = device->currentProfile();
+    const int from = profile ? profile->indexOf(device->currentMode()) : -1;
+    HwSlotDraft::Draft* source = device->k95Draft(from);
+    if(!source || !source->hasBindings || !device->isHwSlotProfile(profile))
+        return;
+    // Only to the other slots that can be edited
+    QList<KbMode*> targets;
+    for(int i = 0; i < 3; ++i){
+        HwSlotDraft::Draft* d = device->k95Draft(i);
+        if(i != from && d && d->hasBindings && !d->conflict && device->k95SlotRecord(i))
+            targets.append(profile->at(i));
+    }
+    if(targets.isEmpty())
+        return;
+    const QString what = keys.isEmpty() ? tr("all keys") : tr("%n key(s)", nullptr, keys.count());
+    ModeSelectDialog dialog(this, device->currentMode(), targets, tr("Copy the hardware bindings of %1 to:").arg(what));
+    if(dialog.exec() != QDialog::Accepted)
+        return;
+    for(KbMode* mode : dialog.selection()){
+        const int to = profile->indexOf(mode);
+        HwSlotDraft::Draft* target = device->k95Draft(to);
+        if(!target) continue;
+        const HwBinding::Keys before = target->keys;
+        for(unsigned k = 0; k < HwBinding::KEYS; ++k){
+            const std::string label = K95PKeyTable::label(k);
+            if(keys.isEmpty() || keys.contains(QString::fromStdString(label)))
+                target->keys[k] = source->keys[k];
+        }
+        const HwBinding::Record* base = device->k95SlotRecord(to);
+        std::string why;
+        if(!HwBindEdit::check(target->keys, base ? &base->keys : nullptr, why)){
+            target->keys = before;
+            QMessageBox::warning(this, tr("Copy to slot"), tr("M%1: %2").arg(to + 1).arg(QString::fromStdString(why)));
+            continue;
+        }
+        device->k95DraftChanged(to);
+    }
+}
+
+void KbWidget::askK95Conflict(int slot){
+    // The buttons say what they do: Yes and No for a question with two actions in it would be guessed at
+    QMessageBox box(QMessageBox::Question, tr("Hardware slot changed"),
+        tr("M%1 changed on the keyboard after you edited it.\n\nReload it from the keyboard (your changes to it are lost), "
+           "or keep your changes on top of what the keyboard has now?").arg(slot + 1), QMessageBox::NoButton, this);
+    QPushButton* reload = box.addButton(tr("Reload from the keyboard"), QMessageBox::DestructiveRole);
+    QPushButton* keep = box.addButton(tr("Keep my changes"), QMessageBox::RejectRole);
+    box.setDefaultButton(keep);
+    box.setEscapeButton(keep);
+    box.exec();
+    device->k95ResolveConflict(slot, box.clickedButton() == reload);
+    showHwBindings();
 }
 
 void KbWidget::on_fwUpdButton_clicked(){
+    if(device->k95InHardwareMode() || (device->k95HwSlots() && !device->k95ModeDecided())){
+        QMessageBox::information(this, tr("Firmware update"),
+                                 tr("<center>The keyboard is in hardware mode.<br />Select a software profile to update its firmware.</center>"));
+        return;
+    }
     // If alt is pressed, ignore upgrades and go straight to the manual prompt
     if(!(qApp->keyboardModifiers() & Qt::AltModifier)){
         // Check version numbers
@@ -512,9 +937,14 @@ void KbWidget::on_layoutBox_activated(int index){
     QString layoutSettingsPath("Devices/%1/hwLayout");
     CkbSettings::set(layoutSettingsPath.arg(device->usbSerial), KeyMap::getLayout(layout));
     device->layout(layout, true);
+    // The HW Binding editor takes the new key map and converts a new Text with the new layout (it kept the old ones until the mode
+    // changed)
+    if(device->k95HwSlots())
+        showHwBindings();
 }
 
 void KbWidget::switchToProfile(const QString& profile, const QString& serial){
+    if(device->hwFlowBusy() || device->k95Recording()) return;
     if(!serial.isEmpty() && device->usbSerial.compare(serial, Qt::CaseInsensitive) != 0)
         return;
 
@@ -559,6 +989,7 @@ static int resolveSelectorIndex(const QString& selector, int currentIndex, int c
 }
 
 void KbWidget::switchToProfileAt(const QString& selector, const QString& serial){
+    if(device->hwFlowBusy() || device->k95Recording()) return;
     if(!serial.isEmpty() && device->usbSerial.compare(serial, Qt::CaseInsensitive) != 0)
         return;
 
@@ -585,6 +1016,7 @@ void KbWidget::showModeCountWarning(int loadedModes, int daemonModes){
 }
 
 void KbWidget::switchToMode(const QString& mode, const QString& serial){
+    if(device->hwFlowBusy() || device->k95Recording()) return;
     if(!serial.isEmpty() && device->usbSerial.compare(serial, Qt::CaseInsensitive) != 0)
         return;
 
@@ -604,6 +1036,7 @@ void KbWidget::switchToMode(const QString& mode, const QString& serial){
 }
 
 void KbWidget::switchToModeAt(const QString& selector, const QString& serial){
+    if(device->hwFlowBusy() || device->k95Recording()) return;
     if(!serial.isEmpty() && device->usbSerial.compare(serial, Qt::CaseInsensitive) != 0)
         return;
 
@@ -682,10 +1115,14 @@ static inline bool checkForWinInfoMatch(KbWindowInfo* kbinfo, XWindowInfo* winin
 }
 
 void KbWidget::switchToModeByFocus(XWindowInfo win) {
+    if(device->hwFlowBusy() || device->k95Recording()) return;
     if(win.isEmpty())
         return;
 
     KbProfile* currentProfile = device->currentProfile();
+    // The keyboard, not the GUI, picks the slot of the hardware profile of the slots
+    if(device->isHwSlotProfile(currentProfile))
+        return;
     int len = currentProfile->modes().length();
     for(int i = 0; i < len; i++)
     {
@@ -716,6 +1153,7 @@ void KbWidget::openEventMgr(KbMode* mode) {
 }
 
 void KbWidget::on_modesList_doubleClicked(const QModelIndex& index) {
+    if(device->hwFlowBusy() || device->isHwSlotProfile(device->currentProfile())) return;
     if(index.column() != ModeListTableModel::COL_EVENT_ICON)
         return;
     // If the current state is "enabled", the previous one was "disabled", which means the user
@@ -726,6 +1164,7 @@ void KbWidget::on_modesList_doubleClicked(const QModelIndex& index) {
 }
 
 void KbWidget::on_modesList_clicked(const QModelIndex& index) {
+    if(device->hwFlowBusy() || device->isHwSlotProfile(device->currentProfile())) return;
     if(index.column() != ModeListTableModel::COL_EVENT_ICON || index.row() > device->currentProfile()->modeCount() - 1)
         return;
     currentMode->winInfo()->setEnabled(!currentMode->winInfo()->isEnabled());

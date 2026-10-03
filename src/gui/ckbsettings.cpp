@@ -39,6 +39,31 @@ QMutex settingsMutex(QMutex::Recursive), settingsCacheMutex(QMutex::Recursive);
 #define qCritical   qDebug
 #endif
 
+static void backupAll(QSettings& from, const QString& backupName){
+    QSettings backupSettings(CkbSettings::Format, QSettings::UserScope, QCoreApplication::organizationName(), backupName);
+    qInfo() << "Backing up settings to" << backupSettings.fileName();
+    QStringList oldKeys = from.allKeys();
+    for(const QString& key : oldKeys){
+        QVariant value = from.value(key);
+        backupSettings.setValue(key, value);
+    }
+    backupSettings.sync();
+    qInfo() << oldKeys.count() << "keys backed up.";
+}
+
+QString CkbSettings::k95pHwBackupOnce(QSettings& settings){
+    static const QString key("Program/K95PHwBackup");
+    if(settings.contains(key))
+        return QString();
+    QString name("none");
+    if(settings.childGroups().contains("Devices")){
+        name = QString("ckb-next_backup_k95p_hw_%1").arg(QDateTime::currentMSecsSinceEpoch() / 1000);
+        backupAll(settings, name);
+    }
+    settings.setValue(key, name);
+    return name;
+}
+
 static QSettings* globalSettings(){
     if(!_globalSettings){
         lockMutexStatic;
@@ -63,15 +88,7 @@ static QSettings* globalSettings(){
             // If the current settings are older than the expected settings version, take a backup first
             const quint16 currentSettingsVersion = _globalSettings->value("Program/SettingsVersion", 0).toInt();
             if(currentSettingsVersion < CKB_NEXT_SETTINGS_VER){
-                QString backupName = QString("ckb-next_backup_%1").arg(QDateTime::currentMSecsSinceEpoch() / 1000);
-                QSettings backupSettings(CkbSettings::Format, QSettings::UserScope, QCoreApplication::organizationName(), backupName);
-                qInfo() << "Backing up settings to" << backupSettings.fileName();
-                QStringList oldKeys = _globalSettings->allKeys();
-                for(const QString& key : oldKeys){
-                    QVariant value = _globalSettings->value(key);
-                    backupSettings.setValue(key, value);
-                }
-                qInfo() << oldKeys.count() << "keys backed up.";
+                backupAll(*_globalSettings, QString("ckb-next_backup_%1").arg(QDateTime::currentMSecsSinceEpoch() / 1000));
                 // Bump the profile version in the current config
                 _globalSettings->setValue("Program/SettingsVersion", CKB_NEXT_SETTINGS_VER);
             }
@@ -82,6 +99,18 @@ static QSettings* globalSettings(){
         }
     }
     return _globalSettings;
+}
+
+QString CkbSettings::k95pHwBackupOnce(){
+    // What was saved last goes into the backup: the writes already queued first
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+    while(cacheWritesInProgress.loadRelaxed() > 0)
+#else
+    while(cacheWritesInProgress.load() > 0)
+#endif
+        QThread::yieldCurrentThread();
+    lockMutexStatic;
+    return k95pHwBackupOnce(*globalSettings());
 }
 
 bool CkbSettings::isBusy(){

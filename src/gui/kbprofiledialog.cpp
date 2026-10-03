@@ -25,6 +25,7 @@ KbProfileDialog::~KbProfileDialog(){
 }
 
 void KbProfileDialog::profileList_reordered(){
+    if(device->hwFlowBusy()) return;
     // Rebuild profile list from items
     QList<KbProfile*> newProfiles;
     int count = ui->profileList->count();
@@ -49,7 +50,11 @@ void KbProfileDialog::repopulate(){
     foreach(KbProfile* profile, device->profiles()){
         QListWidgetItem* item = new QListWidgetItem(QIcon((profile == device->hwProfile()) ? ":/img/icon_profile_hardware.png" : ":/img/icon_profile.png"), profile->name(), ui->profileList);
         item->setData(GUID, profile->id().guid);
-        item->setFlags(item->flags() | Qt::ItemIsEditable);
+        // hwslot1: the hardware profile is not renamed here (its name is the daemon's)
+        if(device->canManageProfile(profile))
+            item->setFlags(item->flags() | Qt::ItemIsEditable);
+        else
+            item->setFlags(item->flags() & ~Qt::ItemIsEditable);
         if(profile == device->currentProfile()){
             item->setSelected(true);
             current = item;
@@ -74,6 +79,7 @@ void KbProfileDialog::addNewProfileItem(){
 }
 
 void KbProfileDialog::on_profileList_itemClicked(QListWidgetItem *item){
+    if(device->hwFlowBusy()) return;
     QUuid guid = item->data(GUID).toUuid();
     if(guid.isNull() && item->data(NEW_FLAG).toInt() == 1){
         // New profile
@@ -96,15 +102,21 @@ void KbProfileDialog::on_profileList_itemClicked(QListWidgetItem *item){
 }
 
 void KbProfileDialog::on_profileList_itemChanged(QListWidgetItem *item){
+    if(device->hwFlowBusy()) return;
     KbProfile* currentProfile = device->currentProfile();
     if(!item || !currentProfile || item->data(GUID).toUuid() != currentProfile->id().guid)
         return;
+    if(!device->canManageProfile(currentProfile)){
+        item->setText(currentProfile->name());
+        return;
+    }
     currentProfile->name(item->text());
     // Set the text to the actual name (trimmed, "" replaced with "Unnamed")
     item->setText(currentProfile->name());
 }
 
 void KbProfileDialog::on_profileList_customContextMenuRequested(const QPoint &pos){
+    if(device->hwFlowBusy()) return;
     QListWidgetItem* item = ui->profileList->itemAt(pos);
     KbProfile* currentProfile = device->currentProfile();
     if(!item || !currentProfile || item->data(GUID).toUuid() != currentProfile->id().guid)
@@ -116,15 +128,24 @@ void KbProfileDialog::on_profileList_customContextMenuRequested(const QPoint &po
     QAction* rename = new QAction(tr("Rename"), this);
     QAction* duplicate = new QAction(tr("Duplicate"), this);
     QAction* del = new QAction(tr("Delete"), this);
-    bool canDelete = (profiles.count() > 1);
+    // Can't delete the last profile on the device, nor rename, duplicate or delete the hardware profile of the slots
+    const bool manage = device->canManageProfile(currentProfile);
+    bool canDelete = (profiles.count() > 1) && manage;
     if(!canDelete)
-        // Can't delete the last profile on the device
         del->setEnabled(false);
+    rename->setEnabled(manage);
+    duplicate->setEnabled(manage);
     QAction* hwsave = new QAction(tr("Save to Hardware"), this);
     // Disable Save to hardware button for unsupported devices
-    if(!device->hwload){
+    if(device->k95Onboard()){
+        hwsave->setEnabled(false);
+        hwsave->setToolTip(tr("Use Save selected slot or Save ALL from the hardware profile."));
+    } else if(!device->hwSaveAllowed()){
         hwsave->setDisabled(true);
-        hwsave->setToolTip(tr("Saving to hardware is not supported on this device."));
+        hwsave->setToolTip(device->model() == KeyMap::K95P && device->k95FirmwareTested() ?
+                           tr("For this device, saving to hardware requires ckb-next-daemon started with --enable-experimental.") :
+                           device->hwload ? tr("Saving to hardware is not supported yet on this device.")
+                                          : tr("Saving to hardware is not supported on this device."));
     }
     QAction* moveup = new QAction(tr("Move Up"), this);
     if(index == 0)
@@ -141,6 +162,9 @@ void KbProfileDialog::on_profileList_customContextMenuRequested(const QPoint &po
     menu.addAction(moveup);
     menu.addAction(movedown);
     QAction* result = menu.exec(QCursor::pos());
+    if(device->hwFlowBusy()) return;
+    if(!result || !result->isEnabled())
+        return;
     if(result == rename){
         ui->profileList->editItem(item);
         // We need to return otherwise repopulate() gets called and the item is destroyed
@@ -346,6 +370,7 @@ void KbProfileDialog::importCleanup(const QStringList& extracted, const QList<QP
 }
 
 void KbProfileDialog::on_importButton_clicked(){
+    if(device->hwFlowBusy()) return;
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setNameFilter(tr("ckb-next profiles (*.ckb)"));
@@ -472,6 +497,10 @@ void KbProfileDialog::on_importButton_clicked(){
         importCleanup(extracted, profileptrs);
         return;
     }
+    if(device->hwFlowBusy()){
+        importCleanup(extracted, profileptrs);
+        return;
+    }
 
     QList<KbProfile*> profiles = device->profiles();
 
@@ -483,6 +512,13 @@ void KbProfileDialog::on_importButton_clicked(){
         QUuid guid(sptr->childGroups().first().trimmed());
         // Messy, shhhh
         const QString& profname = profilestr.at(i);
+        // The hardware profile of the slots comes only from the keyboard, never from a file (not even as a software profile)
+        if(device->isK95HwGuid(guid)){
+            QMessageBox::information(this, tr("Profile Import"),
+                                     tr("%1 is the hardware profile of this keyboard: it is read from the keyboard and is not imported.").arg(profname),
+                                     QMessageBox::Ok);
+            continue;
+        }
         KbProfile* profilematch = nullptr;
         foreach(KbProfile* profile, device->profiles()){
 
@@ -509,6 +545,9 @@ void KbProfileDialog::on_importButton_clicked(){
 
         qDebug() << "Importing" << profname;
         KbProfile* newProfile = device->newProfile(sptr, profileGuid);
+        // A copy has its own identity, also for its modes (two modes with one GUID would be one slot to the daemon)
+        if(ret == QMessageBox::No)
+            newProfile->newId();
         profiles.append(newProfile);
     }
     device->profiles(profiles);
@@ -520,6 +559,7 @@ void KbProfileDialog::on_importButton_clicked(){
 }
 
 void KbProfileDialog::on_profileList_itemSelectionChanged(){
+    if(device->hwFlowBusy()) return;
     // Only change the profile if a single item is selected
     if(ui->profileList->selectedItems().count() > 1)
         return;

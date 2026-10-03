@@ -310,6 +310,15 @@ void KbLight::forceFrameUpdate(){
     _forceFrame = true;
 }
 
+void KbLight::previewBase(){
+    rebuildBaseMap();
+    if(_colorMap == _lastPreviewMap && !_forceFrame)
+        return;
+    _lastPreviewMap = _colorMap;
+    _forceFrame = false;
+    emit frameDisplayed(_colorMap, QSet<QString>(), 0);
+}
+
 void KbLight::frameUpdate(QFile& cmd, bool monochrome){
     rebuildBaseMap();
     _animMap = _colorMap;

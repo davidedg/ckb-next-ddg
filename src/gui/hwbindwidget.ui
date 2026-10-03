@@ -1,0 +1,958 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>HwBindWidget</class>
+ <widget class="QWidget" name="HwBindWidget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>900</width>
+    <height>600</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string notr="true">Form</string>
+  </property>
+  <layout class="QVBoxLayout" name="top" stretch="0,0,0,0,0,1">
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <item>
+    <widget class="QLabel" name="banner">
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item alignment="Qt::AlignLeft">
+    <widget class="QPushButton" name="recreateButton"/>
+   </item>
+   <item>
+    <widget class="QLabel" name="keysTitle">
+     <property name="minimumSize">
+      <size>
+       <width>0</width>
+       <height>23</height>
+      </size>
+     </property>
+     <property name="font">
+      <font>
+       <bold>true</bold>
+      </font>
+     </property>
+     <property name="text">
+      <string>Keys</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="Line" name="keysLine">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QWidget" name="keysHolder" native="true"/>
+   </item>
+   <item>
+    <widget class="HwEditorBox" name="editorBox" native="true">
+     <layout class="QVBoxLayout" name="boxLayout" stretch="0,1,0,0,0">
+      <property name="leftMargin">
+       <number>0</number>
+      </property>
+      <property name="topMargin">
+       <number>0</number>
+      </property>
+      <property name="rightMargin">
+       <number>0</number>
+      </property>
+      <property name="bottomMargin">
+       <number>0</number>
+      </property>
+      <item>
+       <layout class="QHBoxLayout" name="typeRow" stretch="0,0,0,0,1,0">
+        <item>
+         <widget class="QLabel" name="typeLabel">
+          <property name="text">
+           <string>Type:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="typeBox">
+          <item>
+           <property name="text">
+            <string>Default</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Remap</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Macro</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Text</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Kept as read</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
+         <spacer name="typeSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Fixed</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>12</width>
+            <height>0</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QWidget" name="textDelayBox" native="true">
+          <layout class="QHBoxLayout" name="textDelayLayout">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="textDelayLabel">
+             <property name="text">
+              <string>Delay between characters:</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QSpinBox" name="textDelay">
+             <property name="alignment">
+              <set>Qt::AlignRight|Qt::AlignVCenter</set>
+             </property>
+             <property name="suffix">
+              <string> ms</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <spacer name="typeStretch">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>0</width>
+            <height>0</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QWidget" name="selectedBlock" native="true">
+          <layout class="QHBoxLayout" name="selectedLayout" stretch="0,1">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="selectedTitle">
+             <property name="text">
+              <string>Selected:</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="selectedKeys">
+             <property name="text">
+              <string>none</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignRight|Qt::AlignVCenter</set>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QStackedWidget" name="pages">
+        <widget class="QWidget" name="defaultPage"/>
+        <widget class="QWidget" name="remapPage">
+         <layout class="QVBoxLayout" name="remapLayout">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QTabWidget" name="remapTabs">
+            <property name="currentIndex">
+             <number>0</number>
+            </property>
+            <widget class="QWidget" name="keyboardTab">
+             <attribute name="title">
+              <string>Keyboard</string>
+             </attribute>
+             <widget class="QWidget" name="keyboardKeys" native="true"/>
+             <widget class="QWidget" name="imitateColumn" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>240</width>
+                <height>0</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>240</width>
+                <height>16777215</height>
+               </size>
+              </property>
+              <layout class="QVBoxLayout" name="imitateLayout">
+               <property name="leftMargin">
+                <number>0</number>
+               </property>
+               <property name="topMargin">
+                <number>0</number>
+               </property>
+               <property name="rightMargin">
+                <number>0</number>
+               </property>
+               <property name="bottomMargin">
+                <number>0</number>
+               </property>
+               <item>
+                <widget class="QCheckBox" name="imitateCheck">
+                 <property name="toolTip">
+                  <string>Holds the key: On press for the time below, Toggle until the key is pressed again. iCUE offers it on the keys of its keyboard, not on the media keys.</string>
+                 </property>
+                 <property name="text">
+                  <string>Imitate holding key</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QComboBox" name="imitateMode">
+                 <item>
+                  <property name="text">
+                   <string>On press</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>Toggle</string>
+                  </property>
+                 </item>
+                </widget>
+               </item>
+               <item>
+                <widget class="QWidget" name="terminateRow" native="true">
+                 <layout class="QHBoxLayout" name="terminateLayout">
+                  <property name="leftMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="topMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="rightMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="bottomMargin">
+                   <number>0</number>
+                  </property>
+                  <item>
+                   <widget class="QLabel" name="terminateLabel">
+                    <property name="text">
+                     <string>Terminate in:</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QDoubleSpinBox" name="terminateSpin">
+                    <property name="minimumSize">
+                     <size>
+                      <width>100</width>
+                      <height>0</height>
+                     </size>
+                    </property>
+                    <property name="maximumSize">
+                     <size>
+                      <width>100</width>
+                      <height>16777215</height>
+                     </size>
+                    </property>
+                    <property name="suffix">
+                     <string> s</string>
+                    </property>
+                    <property name="decimals">
+                     <number>1</number>
+                    </property>
+                    <property name="minimum">
+                     <double>0.100000000000000</double>
+                    </property>
+                    <property name="maximum">
+                     <double>16777.200000000000728</double>
+                    </property>
+                    <property name="singleStep">
+                     <double>0.100000000000000</double>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <spacer name="terminateStretch">
+                    <property name="orientation">
+                     <enum>Qt::Horizontal</enum>
+                    </property>
+                    <property name="sizeHint" stdset="0">
+                     <size>
+                      <width>0</width>
+                      <height>0</height>
+                     </size>
+                    </property>
+                   </spacer>
+                  </item>
+                 </layout>
+                </widget>
+               </item>
+               <item>
+                <spacer name="imitateStretch">
+                 <property name="orientation">
+                  <enum>Qt::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>0</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+              </layout>
+             </widget>
+            </widget>
+            <widget class="QWidget" name="mouseTab">
+             <attribute name="title">
+              <string>Mouse</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="mouseLayout">
+              <item>
+               <widget class="QLabel" name="mouseLabel">
+                <property name="text">
+                 <string>Button:</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QRadioButton" name="mouse1Radio">
+                <property name="text">
+                 <string>Mouse1 (Left)</string>
+                </property>
+                <attribute name="buttonGroup">
+                 <string notr="true">mouseGroup</string>
+                </attribute>
+               </widget>
+              </item>
+              <item>
+               <widget class="QRadioButton" name="mouse2Radio">
+                <property name="text">
+                 <string>Mouse2 (Right)</string>
+                </property>
+                <attribute name="buttonGroup">
+                 <string notr="true">mouseGroup</string>
+                </attribute>
+               </widget>
+              </item>
+              <item>
+               <widget class="QRadioButton" name="mouse3Radio">
+                <property name="text">
+                 <string>Mouse3 (Middle)</string>
+                </property>
+                <attribute name="buttonGroup">
+                 <string notr="true">mouseGroup</string>
+                </attribute>
+               </widget>
+              </item>
+              <item>
+               <widget class="QRadioButton" name="mouse4Radio">
+                <property name="text">
+                 <string>Mouse4 (Back)</string>
+                </property>
+                <attribute name="buttonGroup">
+                 <string notr="true">mouseGroup</string>
+                </attribute>
+               </widget>
+              </item>
+              <item>
+               <widget class="QRadioButton" name="mouse5Radio">
+                <property name="text">
+                 <string>Mouse5 (Forward)</string>
+                </property>
+                <attribute name="buttonGroup">
+                 <string notr="true">mouseGroup</string>
+                </attribute>
+               </widget>
+              </item>
+              <item>
+               <spacer name="mouseStretch">
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>0</width>
+                  <height>0</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="shortcutTab">
+             <attribute name="title">
+              <string>Shortcut</string>
+             </attribute>
+             <widget class="QWidget" name="shortcutKeys" native="true"/>
+             <widget class="QWidget" name="shortcutColumn" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>240</width>
+                <height>0</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>240</width>
+                <height>16777215</height>
+               </size>
+              </property>
+              <layout class="QGridLayout" name="shortcutGrid">
+               <property name="leftMargin">
+                <number>0</number>
+               </property>
+               <property name="topMargin">
+                <number>0</number>
+               </property>
+               <property name="rightMargin">
+                <number>0</number>
+               </property>
+               <property name="bottomMargin">
+                <number>0</number>
+               </property>
+               <item row="0" column="0" colspan="2">
+                <widget class="HwShortcutChips" name="shortcutChips" native="true"/>
+               </item>
+               <item row="1" column="0">
+                <widget class="QPushButton" name="winButton">
+                 <property name="text">
+                  <string>Win</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item row="1" column="1">
+                <widget class="QPushButton" name="ctrlButton">
+                 <property name="text">
+                  <string>Ctrl</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item row="2" column="0">
+                <widget class="QPushButton" name="altButton">
+                 <property name="text">
+                  <string>Alt</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item row="2" column="1">
+                <widget class="QPushButton" name="shiftButton">
+                 <property name="text">
+                  <string>Shift</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item row="3" column="0" colspan="2">
+                <spacer name="shortcutStretch">
+                 <property name="orientation">
+                  <enum>Qt::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>0</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item row="4" column="0">
+                <widget class="QPushButton" name="clearShortcutButton">
+                 <property name="text">
+                  <string>Clear</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </widget>
+            <widget class="QWidget" name="languageTab">
+             <attribute name="title">
+              <string>Language keys</string>
+             </attribute>
+             <layout class="QHBoxLayout" name="languageRow" stretch="0,0,1">
+              <item alignment="Qt::AlignTop">
+               <widget class="QLabel" name="languageLabel">
+                <property name="text">
+                 <string>Key:</string>
+                </property>
+               </widget>
+              </item>
+              <item alignment="Qt::AlignTop">
+               <widget class="QComboBox" name="languageBox">
+                <property name="minimumSize">
+                 <size>
+                  <width>300</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <item>
+                 <property name="text">
+                  <string>Lang1 (Hangul/English)</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>Lang2 (Hanja)</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>International1 (Ro)</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>International2 (Katakana/Hiragana)</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>International3 (Yen)</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>International4 (Henkan)</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>International5 (Muhenkan)</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>Non-US # and ~</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>Non-US \ and |</string>
+                 </property>
+                </item>
+               </widget>
+              </item>
+              <item>
+               <spacer name="languageStretch">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>0</width>
+                  <height>0</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+             </layout>
+            </widget>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="macroPage">
+         <layout class="QGridLayout" name="macroGrid" rowstretch="0,0,0,1" columnstretch="0,0,0,1">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item row="0" column="0">
+           <widget class="QLabel" name="macroKeyLabel">
+            <property name="text">
+             <string>Key:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QComboBox" name="keyChooser"/>
+          </item>
+          <item row="0" column="2">
+           <widget class="QPushButton" name="pressButton">
+            <property name="text">
+             <string>Press</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="3" alignment="Qt::AlignLeft">
+           <widget class="QPushButton" name="releaseButton">
+            <property name="text">
+             <string>Release</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="delayLabel">
+            <property name="text">
+             <string>Delay:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QSpinBox" name="delaySpin">
+            <property name="alignment">
+             <set>Qt::AlignRight|Qt::AlignVCenter</set>
+            </property>
+            <property name="suffix">
+             <string> ms</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="2">
+           <widget class="QPushButton" name="delayButton">
+            <property name="text">
+             <string>Delay</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="3" alignment="Qt::AlignRight">
+           <widget class="QWidget" name="macroRight" native="true">
+            <layout class="QHBoxLayout" name="macroRightLayout">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="runLabel">
+               <property name="text">
+                <string>Run:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QComboBox" name="runBox">
+               <property name="toolTip">
+                <string>On press, On release: the macro runs once. While pressed: it runs once and stops when the key is released. Toggle: a press starts it, the next press stops it.</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="runSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeType">
+                <enum>QSizePolicy::Fixed</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>12</width>
+                 <height>0</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="recordButton">
+               <property name="toolTip">
+                <string>Records the physical keys. While recording the keyboard is in software mode with no bindings and its lights are grey; it goes back to its hardware slot when recording stops.</string>
+               </property>
+               <property name="text">
+                <string>Record</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="maxLabel">
+            <property name="text">
+             <string>Max:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QSpinBox" name="maxSpin">
+            <property name="alignment">
+             <set>Qt::AlignRight|Qt::AlignVCenter</set>
+            </property>
+            <property name="suffix">
+             <string> ms</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="2">
+           <widget class="QPushButton" name="varDelayButton">
+            <property name="text">
+             <string>Var. Delay</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="3" rowspan="2">
+           <widget class="HwMacroTable" name="macroTable">
+            <property name="contextMenuPolicy">
+             <enum>Qt::CustomContextMenu</enum>
+            </property>
+            <property name="acceptDrops">
+             <bool>true</bool>
+            </property>
+            <property name="editTriggers">
+             <set>QAbstractItemView::NoEditTriggers</set>
+            </property>
+            <property name="dragEnabled">
+             <bool>true</bool>
+            </property>
+            <property name="dragDropOverwriteMode">
+             <bool>false</bool>
+            </property>
+            <property name="dragDropMode">
+             <enum>QAbstractItemView::DragDrop</enum>
+            </property>
+            <property name="alternatingRowColors">
+             <bool>true</bool>
+            </property>
+            <property name="selectionMode">
+             <enum>QAbstractItemView::ContiguousSelection</enum>
+            </property>
+            <property name="selectionBehavior">
+             <enum>QAbstractItemView::SelectRows</enum>
+            </property>
+            <property name="showGrid">
+             <bool>false</bool>
+            </property>
+            <attribute name="horizontalHeaderStretchLastSection">
+             <bool>false</bool>
+            </attribute>
+            <column>
+             <property name="text">
+              <string>Event</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Key</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Delay</string>
+             </property>
+            </column>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="textPage">
+         <layout class="QVBoxLayout" name="textLayout" stretch="1,0">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <layout class="QHBoxLayout" name="textRow" stretch="1">
+            <item>
+             <widget class="QPlainTextEdit" name="textEdit"/>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QLabel" name="textWhy">
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QLabel" name="keptLabel">
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="flagsLabel">
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="errorLabel">
+        <property name="styleSheet">
+         <string notr="true">color: red</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="buttonsRow" stretch="0,0,1,0">
+        <item>
+         <widget class="QPushButton" name="copyButton">
+          <property name="text">
+           <string>Copy to slot...</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="resetButton">
+          <property name="text">
+           <string>Reset to the slot</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="noticeLabel">
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignVCenter</set>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="applyButton">
+          <property name="text">
+           <string>Apply</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>HwShortcutChips</class>
+   <extends>QWidget</extends>
+   <header>hwbindwidgetparts.h</header>
+  </customwidget>
+  <customwidget>
+   <class>HwEditorBox</class>
+   <extends>QWidget</extends>
+   <header>hwbindwidgetparts.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>HwMacroTable</class>
+   <extends>QTableWidget</extends>
+   <header>hwbindwidgetparts.h</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+ <buttongroups>
+  <buttongroup name="mouseGroup"/>
+ </buttongroups>
+</ui>

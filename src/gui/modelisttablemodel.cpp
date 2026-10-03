@@ -38,8 +38,8 @@ int ModeListTableModel::rowCount(const QModelIndex& parent) const {
     const KbProfile* const prof = device->currentProfile();
     if(!prof)
         return 0;
-    // +1 for the "New mode" item
-    return prof->modeCount() + 1;
+    // +1 for the "New mode" item (none in the hardware profile of the slots: its modes are the slots)
+    return prof->modeCount() + (device->canAddMode(prof) ? 1 : 0);
 }
 
 int ModeListTableModel::columnCount(const QModelIndex& parent) const {
@@ -50,7 +50,8 @@ QIcon ModeListTableModel::modeIcon(const int i) const{
     const KbProfile* const currentProfile = device->currentProfile();
     const KbProfile* const hwProfile = device->hwProfile();
     int hwModeCount = device->hwModeCount;
-    if(i >= hwModeCount)
+    // hwslot1: the modes of a software profile are not slots
+    if(i >= hwModeCount || (device->k95HwSlots() && currentProfile != hwProfile))
         return QIcon(":/img/icon_mode.png");
     else
         return QIcon(QString(currentProfile == hwProfile ? ":/img/icon_mode%1_hardware.png" : ":/img/icon_mode%1.png").arg(i + 1));
@@ -76,8 +77,12 @@ QVariant ModeListTableModel::data(const QModelIndex& index, int role) const{
                 return QString(tr("New mode..."));
             return QVariant();
         }
-        if(col == COL_MODE_NAME)
+        if(col == COL_MODE_NAME){
+            // hwslot1: an empty slot (a save makes a new profile in it) until it is edited
+            if(role == Qt::DisplayRole && device->isHwSlotProfile(prof) && device->k95SlotEmpty(row) && !device->k95DraftModified(row))
+                return tr("%1 (empty)").arg(prof->at(row)->name());
             return prof->at(row)->name();
+        }
     } else if (role == Qt::DecorationRole ) {
         // Add the + for the new mode
         if(row > prof->modeCount() - 1){
@@ -90,6 +95,9 @@ QVariant ModeListTableModel::data(const QModelIndex& index, int role) const{
         case COL_MODE_ICON:
             return modeIcon(row);
         case COL_EVENT_ICON:
+            // No window events in the hardware profile of the slots: the keyboard, not the GUI, picks the slot
+            if(device->isHwSlotProfile(prof))
+                return QVariant();
             return eventIcon(prof->at(row));
         }
     } else if (role == Qt::FontRole && row > prof->modeCount() - 1 && col == COL_MODE_NAME) {
@@ -113,9 +121,12 @@ Qt::ItemFlags ModeListTableModel::flags(const QModelIndex& index) const {
     const KbProfile* const prof = device->currentProfile();
     if(row > prof->modeCount() - 1) // New mode...
         return Qt::ItemIsSelectable | Qt::ItemIsEnabled;
+    Qt::ItemFlags flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
+    if(device->canMoveModes(prof))
+        flags |= Qt::ItemIsDragEnabled;
     if(col == COL_MODE_NAME)
-        return Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsDragEnabled | Qt::ItemIsEditable;
-    return Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsDragEnabled;
+        flags |= Qt::ItemIsEditable;
+    return flags;
 }
 
 bool ModeListTableModel::setData(const QModelIndex& index, const QVariant& value, int role) {
@@ -136,6 +147,8 @@ bool ModeListTableModel::setData(const QModelIndex& index, const QVariant& value
 }
 
 int ModeListTableModel::addNewMode(){
+    if(!device->canAddMode(device->currentProfile()))
+        return -1;
     KbMode* newMode = device->newMode();
     // "Add" the new mode item back
     emit beginInsertRows(QModelIndex(), rowCount()-1, rowCount()-1);
@@ -155,7 +168,8 @@ Qt::DropActions ModeListTableModel::supportedDropActions() const{
 bool ModeListTableModel::dropMimeData(const QMimeData* data, Qt::DropAction action, int dstrow, int column, const QModelIndex& parent){
     // Don't allow dropping after the new mode item
     // it has to be done here as there's no way to check for it in flags()
-    if(dstrow == -1 || action != Qt::MoveAction || dstrow > rowCount() - 1 || !data->hasFormat("application/x-qabstractitemmodeldatalist"))
+    if(dstrow == -1 || action != Qt::MoveAction || dstrow > rowCount() - 1 || !data->hasFormat("application/x-qabstractitemmodeldatalist") ||
+       !device->canMoveModes(device->currentProfile()))
         return false;
     QByteArray e = data->data("application/x-qabstractitemmodeldatalist");
     QDataStream stream(&e, QIODevice::ReadOnly);
