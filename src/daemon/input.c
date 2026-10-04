@@ -762,6 +762,7 @@ static void _cmd_macro(usbmode* mode, const char* keys, const char* assignment, 
             destroymacro(macros[i]);
             // If the new macro has no actions, erase the existing one
             if(!macro.actioncount){
+                free(macro.actions);
                 for(int j = i + 1; j < bind->macrocount; j++)
                     macros[j - 1] = macros[j];
                 bind->macrocount--;
@@ -773,8 +774,10 @@ static void _cmd_macro(usbmode* mode, const char* keys, const char* assignment, 
     }
 
     // Add the macro to the device settings if not empty
-    if(macro.actioncount < 1)
+    if(macro.actioncount < 1){
+        free(macro.actions);
         return;
+    }
     if(bind->macrocount == bind->macrocap){
         int capacity = bind->macrocap + 16;
         keymacro** expanded = realloc(bind->macros, capacity * sizeof(*expanded));
