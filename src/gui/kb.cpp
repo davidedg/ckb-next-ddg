@@ -13,6 +13,47 @@
 #include "compat/qrand.h"
 #include <set>
 
+// The same keys as Kb::save(), without writing preferences or advancing any
+// profile/mode revision. Migration uses this while its old modes still exist.
+class K95BackupSettings : public CkbSettingsBase {
+public:
+    void beginGroup(const QString& group) override { groups.append(group); }
+    void endGroup() override { groups.removeLast(); }
+    QStringList childGroups() const override { return children(true); }
+    QStringList childKeys() const override { return children(false); }
+    bool contains(const QString& key) const override { return entries.contains(path(key)); }
+    QVariant value(const QString& key, const QVariant& fallback = QVariant()) const override {
+        return entries.value(path(key), fallback);
+    }
+    void setValue(const QString& key, const QVariant& value) override { entries.insert(path(key), value); }
+    void remove(const QString& key) override {
+        const QString prefix = path(key);
+        auto it = entries.lowerBound(prefix);
+        while(it != entries.end() && (it.key() == prefix || it.key().startsWith(prefix + '/')))
+            it = entries.erase(it);
+    }
+    const QMap<QString, QVariant>& allValues() const { return entries; }
+private:
+    QString path(const QString& key) const { return groups.isEmpty() ? key : groups.join('/') + '/' + key; }
+    QStringList children(bool subgroups) const {
+        const QString prefix = groups.isEmpty() ? QString() : groups.join('/') + '/';
+        QStringList found;
+        for(auto it = entries.constBegin(); it != entries.constEnd(); ++it){
+            if(!it.key().startsWith(prefix)) continue;
+            const QString remainder = it.key().mid(prefix.size());
+            const int separator = remainder.indexOf('/');
+            if((separator >= 0) == subgroups){
+                const QString child = subgroups ? remainder.left(separator) : remainder;
+                if(!found.contains(child)) found.append(child);
+            }
+        }
+        found.sort();
+        return found;
+    }
+    QStringList groups;
+    QMap<QString, QVariant> entries;
+};
+
 // The daemon recognizes command words before decoding arguments, on every
 // model. Escape every UTF-8 byte so a name can never become a command token.
 // Empty or malformed names are not sent; the daemon keeps the previous name.
@@ -465,6 +506,10 @@ void Kb::save(){
         return;
     _needsSave = false;
     CkbSettings settings(prefsPath, true);
+    writeDeviceSettings(settings, true);
+}
+
+void Kb::writeDeviceSettings(CkbSettingsBase& settings, bool updateModel){
     QStringList guids;
     QString currentGuid;
     foreach(KbProfile* profile, _profiles){
@@ -482,19 +527,23 @@ void Kb::save(){
     settings.setValue("Profiles", guids.join(" "));
     settings.setValue("hwLayout", KeyMap::getLayout(_layout));
     settings.setValue("batteryIndicator", showBatteryIndicator);
-    if(_k95HwSlots && _hwProfile && _profiles.contains(_hwProfile))
-        k95HwGuid = _hwProfile->id().guidString();
+    const QString hwGuid = _k95HwSlots && _hwProfile && _profiles.contains(_hwProfile) ?
+        _hwProfile->id().guidString() : k95HwGuid;
+    if(updateModel)
+        k95HwGuid = hwGuid;
     if(k95Migrated)
         settings.setValue("K95PHwMigrated", true);
-    if(!k95HwGuid.isEmpty())
-        settings.setValue("K95PHwProfile", k95HwGuid);
+    if(!hwGuid.isEmpty())
+        settings.setValue("K95PHwProfile", hwGuid);
     // The drafts of the slots (hwslot1), kept apart from the profiles so that an export never carries them; rewritten
     // also by a GUI whose daemon does not offer hwslot1, which leaves them as they were
     if(_model == KeyMap::K95P){
         for(int i = 0; i < 3; ++i){
-            HwSlotDraft::Draft& d = k95Drafts[size_t(i)];
+            HwSlotDraft::Draft d = k95Drafts[size_t(i)];
             if(_k95HwSlots)
                 d.modified = k95DraftModified(i);
+            if(updateModel)
+                k95Drafts[size_t(i)].modified = d.modified;
             if(!d.base.empty() || d.modified)
                 settings.setValue(QString("K95PSlot%1").arg(i + 1), QString::fromStdString(HwSlotDraft::serialize(d)));
         }
@@ -834,7 +883,9 @@ void Kb::applyK95CacheBatch(){
     // No profile identity, name, mode or binding may change before this succeeds.
     if(_k95HwSlots && !k95Migrated){
         CkbSettings::HwBackupStatus status;
-        CkbSettings::k95pHwBackupOnce(&status);
+        K95BackupSettings snapshot;
+        writeDeviceSettings(snapshot, false);
+        CkbSettings::k95pHwBackupOnce(&status, prefsPath, snapshot.allValues());
         if(status == CkbSettings::BackupFailed){
             k95MigrationBlocked = true;
             k95CacheReady = false;

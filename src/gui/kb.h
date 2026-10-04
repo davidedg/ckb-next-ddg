@@ -395,6 +395,7 @@ private:
 
     // CkbSettings path
     QString prefsPath;
+    void writeDeviceSettings(CkbSettingsBase& settings, bool updateModel);
 
     // Current firmware update file
     QString fwUpdPath;

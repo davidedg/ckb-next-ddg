@@ -65,6 +65,10 @@ public:
     // empty string for an existing backup or failure (distinguished by status).
     static QString k95pHwBackupOnce(QSettings& settings, HwBackupStatus* status = nullptr);
     static QString k95pHwBackupOnce(HwBackupStatus* status = nullptr);
+    // Replace the current device's persisted keys with a non-mutating
+    // serialization of the live GUI model in the verified backup.
+    static QString k95pHwBackupOnce(HwBackupStatus* status, const QString& devicePath,
+                                    const QMap<QString, QVariant>& deviceSnapshot);
 
     // One-shot get/set
     static QVariant get(const QString& key, const QVariant& defaultValue = QVariant());
@@ -101,6 +105,8 @@ protected:
     CkbSettings(QSettings& settings);
 
 private:
+    static QString k95pHwBackupOnce(QSettings& settings, HwBackupStatus* status, const QString& devicePath,
+                                    const QMap<QString, QVariant>* deviceSnapshot);
     QSettings* backing;
     QStringList groups;
     QStringList removeCache;

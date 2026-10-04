@@ -51,28 +51,47 @@ static bool readableBackup(const QString& name){
     return backup.status() == QSettings::NoError && backup.childGroups().contains("Devices");
 }
 
-static bool backupMatches(QSettings& from, const QString& name){
+static bool backupValueMatches(const QVariant& expected, const QVariant& actual){
+    // QSettings reads an empty/single-item QStringList as an invalid
+    // QVariant/a QString. Compare the list as callers read it back.
+    if(expected.userType() == QMetaType::QStringList &&
+       (!actual.isValid() || actual.userType() == QMetaType::QString || actual.userType() == QMetaType::QStringList) &&
+       actual.toStringList() == expected.toStringList())
+        return true;
+    return actual == expected;
+}
+
+static bool backupMatches(const QMap<QString, QVariant>& expected, const QString& name){
     if(!readableBackup(name)) return false;
     QSettings backup(CkbSettings::Format, QSettings::UserScope, QCoreApplication::organizationName(), name);
     backup.setFallbacksEnabled(false);
-    const QStringList keys = from.allKeys();
+    const QStringList keys = expected.keys();
     if(backup.allKeys() != keys){
         qWarning() << "K95P backup verification: the key lists differ";
         return false;
     }
     for(const QString& key : keys){
-        const QVariant expected = from.value(key), actual = backup.value(key);
-        // QSettings reads an empty/single-item QStringList as an invalid
-        // QVariant/a QString. Compare the list as callers read it back.
-        if(expected.userType() == QMetaType::QStringList &&
-           (!actual.isValid() || actual.userType() == QMetaType::QString || actual.userType() == QMetaType::QStringList) &&
-           actual.toStringList() == expected.toStringList())
-            continue;
-        if(actual != expected){
-            qWarning() << "K95P backup verification: different stored value at" << key << expected.typeName() << actual.typeName();
+        const QVariant wanted = expected.value(key), actual = backup.value(key);
+        if(!backupValueMatches(wanted, actual)){
+            qWarning() << "K95P backup verification: different stored value at" << key << wanted.typeName() << actual.typeName();
             return false;
         }
     }
+    return true;
+}
+
+static bool backupHasDeviceSnapshot(const QString& name, const QString& devicePath,
+                                    const QMap<QString, QVariant>& snapshot){
+    if(!readableBackup(name)) return false;
+    QSettings backup(CkbSettings::Format, QSettings::UserScope, QCoreApplication::organizationName(), name);
+    backup.setFallbacksEnabled(false);
+    const QString prefix = devicePath + '/';
+    QStringList keys;
+    for(const QString& key : backup.allKeys())
+        if(key.startsWith(prefix)) keys.append(key.mid(prefix.size()));
+    if(keys != snapshot.keys()) return false;
+    for(auto it = snapshot.constBegin(); it != snapshot.constEnd(); ++it)
+        if(!backupValueMatches(it.value(), backup.value(prefix + it.key()))) return false;
     return true;
 }
 
@@ -92,7 +111,27 @@ static bool backupAll(QSettings& from, const QString& backupName){
     return true;
 }
 
+static bool backupAll(const QMap<QString, QVariant>& values, const QString& backupName){
+    QSettings backup(CkbSettings::Format, QSettings::UserScope, QCoreApplication::organizationName(), backupName);
+    backup.setFallbacksEnabled(false);
+    qInfo() << "Backing up settings to" << backup.fileName();
+    for(auto it = values.constBegin(); it != values.constEnd(); ++it)
+        backup.setValue(it.key(), it.value());
+    backup.sync();
+    if(backup.status() != QSettings::NoError){
+        qWarning() << "Settings backup failed:" << backup.fileName() << backup.status();
+        return false;
+    }
+    qInfo() << values.size() << "keys backed up.";
+    return true;
+}
+
 QString CkbSettings::k95pHwBackupOnce(QSettings& settings, HwBackupStatus* status){
+    return k95pHwBackupOnce(settings, status, QString(), nullptr);
+}
+
+QString CkbSettings::k95pHwBackupOnce(QSettings& settings, HwBackupStatus* status,
+                                      const QString& devicePath, const QMap<QString, QVariant>* deviceSnapshot){
     static const QString key("Program/K95PHwBackup");
     // A verified copy survives a marker write error and can be reused on retry.
     // Restarting without its marker may make another unique copy, never overwrite it.
@@ -106,16 +145,29 @@ QString CkbSettings::k95pHwBackupOnce(QSettings& settings, HwBackupStatus* statu
         qWarning() << "K95P migration: settings could not be synchronized:" << settings.fileName();
         return QString();
     }
-    const bool devices = settings.childGroups().contains("Devices");
+    if(deviceSnapshot && (!devicePath.startsWith("Devices/") || devicePath.endsWith('/'))){
+        qWarning() << "K95P migration: invalid snapshot path:" << devicePath;
+        return QString();
+    }
+    QMap<QString, QVariant> expected;
+    const QString prefix = deviceSnapshot ? devicePath + '/' : QString();
+    for(const QString& settingKey : settings.allKeys())
+        if(!deviceSnapshot || !settingKey.startsWith(prefix))
+            expected.insert(settingKey, settings.value(settingKey));
+    if(deviceSnapshot)
+        for(auto it = deviceSnapshot->constBegin(); it != deviceSnapshot->constEnd(); ++it)
+            expected.insert(prefix + it.key(), it.value());
+    const bool devices = settings.childGroups().contains("Devices") || (deviceSnapshot && !deviceSnapshot->isEmpty());
     const QString previous = settings.value(key).toString();
-    if((previous == "none" && !devices) || (!previous.isEmpty() && previous != "none" && readableBackup(previous))){
+    if((previous == "none" && !devices) || (!previous.isEmpty() && previous != "none" && readableBackup(previous) &&
+                                           (!deviceSnapshot || backupHasDeviceSnapshot(previous, devicePath, *deviceSnapshot)))){
         if(status) *status = devices ? BackupValid : BackupNotNeeded;
         return QString();
     }
     QString name("none");
     if(devices){
         name = pending.value(settings.fileName());
-        if(name.isEmpty() || !backupMatches(settings, name)){
+        if(name.isEmpty() || !backupMatches(expected, name)){
             // UUID plus milliseconds also separates multiple devices/retries in one second.
             do {
                 name = QString("ckb-next_backup_k95p_hw_%1_%2").arg(QDateTime::currentMSecsSinceEpoch())
@@ -123,7 +175,7 @@ QString CkbSettings::k95pHwBackupOnce(QSettings& settings, HwBackupStatus* statu
                 QSettings candidate(Format, QSettings::UserScope, QCoreApplication::organizationName(), name);
                 if(!QFileInfo::exists(candidate.fileName())) break;
             } while(true);
-            if(!backupAll(settings, name) || !backupMatches(settings, name)){
+            if(!backupAll(expected, name) || !backupMatches(expected, name)){
                 qWarning() << "K95P migration: the settings backup could not be verified";
                 return QString();
             }
@@ -188,6 +240,11 @@ static QSettings* globalSettings(){
 }
 
 QString CkbSettings::k95pHwBackupOnce(HwBackupStatus* status){
+    return k95pHwBackupOnce(status, QString(), QMap<QString, QVariant>());
+}
+
+QString CkbSettings::k95pHwBackupOnce(HwBackupStatus* status, const QString& devicePath,
+                                      const QMap<QString, QVariant>& deviceSnapshot){
     // What was saved last goes into the backup: the writes already queued first
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
     while(cacheWritesInProgress.loadRelaxed() > 0)
@@ -196,7 +253,8 @@ QString CkbSettings::k95pHwBackupOnce(HwBackupStatus* status){
 #endif
         QThread::yieldCurrentThread();
     lockMutexStatic;
-    return k95pHwBackupOnce(*globalSettings(), status);
+    return k95pHwBackupOnce(*globalSettings(), status, devicePath,
+                            devicePath.isEmpty() ? nullptr : &deviceSnapshot);
 }
 
 bool CkbSettings::isBusy(){
