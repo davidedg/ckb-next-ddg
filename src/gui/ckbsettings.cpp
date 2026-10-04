@@ -81,7 +81,7 @@ static bool backupMatches(const QMap<QString, QVariant>& expected, const QString
 }
 
 static bool backupHasDeviceSnapshot(const QString& name, const QString& devicePath,
-                                    const QMap<QString, QVariant>& snapshot){
+                                    const QMap<QString, QVariant>& snapshot, QSettings& source){
     if(!readableBackup(name)) return false;
     QSettings backup(CkbSettings::Format, QSettings::UserScope, QCoreApplication::organizationName(), name);
     backup.setFallbacksEnabled(false);
@@ -92,6 +92,15 @@ static bool backupHasDeviceSnapshot(const QString& name, const QString& devicePa
     if(keys != snapshot.keys()) return false;
     for(auto it = snapshot.constBegin(); it != snapshot.constEnd(); ++it)
         if(!backupValueMatches(it.value(), backup.value(prefix + it.key()))) return false;
+    // The serialized model is complete for the current GUI, but an older GUI
+    // may have stored fields this version does not know. Preserve and verify
+    // the original device values as a separate part of the backup.
+    for(const QString& key : source.allKeys()){
+        if(!key.startsWith(prefix)) continue;
+        const QString original = QStringLiteral("Program/K95PHwOriginal/") + key;
+        if(!backup.contains(original) || !backupValueMatches(source.value(key), backup.value(original)))
+            return false;
+    }
     return true;
 }
 
@@ -151,16 +160,19 @@ QString CkbSettings::k95pHwBackupOnce(QSettings& settings, HwBackupStatus* statu
     }
     QMap<QString, QVariant> expected;
     const QString prefix = deviceSnapshot ? devicePath + '/' : QString();
-    for(const QString& settingKey : settings.allKeys())
+    for(const QString& settingKey : settings.allKeys()){
         if(!deviceSnapshot || !settingKey.startsWith(prefix))
             expected.insert(settingKey, settings.value(settingKey));
+        else
+            expected.insert(QStringLiteral("Program/K95PHwOriginal/") + settingKey, settings.value(settingKey));
+    }
     if(deviceSnapshot)
         for(auto it = deviceSnapshot->constBegin(); it != deviceSnapshot->constEnd(); ++it)
             expected.insert(prefix + it.key(), it.value());
     const bool devices = settings.childGroups().contains("Devices") || (deviceSnapshot && !deviceSnapshot->isEmpty());
     const QString previous = settings.value(key).toString();
     if((previous == "none" && !devices) || (!previous.isEmpty() && previous != "none" && readableBackup(previous) &&
-                                           (!deviceSnapshot || backupHasDeviceSnapshot(previous, devicePath, *deviceSnapshot)))){
+                                           (!deviceSnapshot || backupHasDeviceSnapshot(previous, devicePath, *deviceSnapshot, settings)))){
         if(status) *status = devices ? BackupValid : BackupNotNeeded;
         return QString();
     }

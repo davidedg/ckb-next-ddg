@@ -66,7 +66,8 @@ public:
     static QString k95pHwBackupOnce(QSettings& settings, HwBackupStatus* status = nullptr);
     static QString k95pHwBackupOnce(HwBackupStatus* status = nullptr);
     // Replace the current device's persisted keys with a non-mutating
-    // serialization of the live GUI model in the verified backup.
+    // serialization of the live GUI model. Original values, including keys
+    // this GUI does not recognize, remain in a separate backup section.
     static QString k95pHwBackupOnce(HwBackupStatus* status, const QString& devicePath,
                                     const QMap<QString, QVariant>& deviceSnapshot);
 
