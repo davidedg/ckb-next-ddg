@@ -8,6 +8,8 @@
 #include "profile_cape.h"
 #include "cape_hwslot.h"
 #include <ckbnextconfig.h>
+#include <limits.h>
+#include <ctype.h>
 
 // OSX doesn't like putting FIFOs in /dev for some reason
 // Don't make these pointers, as doing so will result in sizeof() not producing the correct result.
@@ -24,16 +26,28 @@ const char pidpath[] = DEVPATH "0/pid";
 
 pid_t is_pid_running(void){
     FILE* pidfile = fopen(pidpath, "r");
-    if(pidfile){
-        pid_t pid;
-        if(fscanf(pidfile, "%d", &pid) == EOF)
-            ckb_err("PID fscanf returned EOF (%s)", strerror(errno));
-        fclose(pidfile);
-        if(pid > 0){
-            // kill -s 0 checks if the PID is active but doesn't send a signal
-            if(!kill(pid, 0))
-                return pid;
-        }
+    if(!pidfile)
+        return 0;
+    char text[64];
+    pid_t pid = 0;
+    if(fgets(text, sizeof(text), pidfile)){
+        char* end;
+        errno = 0;
+        const long value = strtol(text, &end, 10);
+        int valid = end != text && errno != ERANGE && value > 0 && value <= INT_MAX;
+        while(*end && isspace((unsigned char)*end)) ++end;
+        if(*end) valid = 0;
+        int c;
+        while((c = fgetc(pidfile)) != EOF)
+            if(!isspace((unsigned char)c)) valid = 0;
+        if(valid && !ferror(pidfile))
+            pid = (pid_t)value;
+    }
+    fclose(pidfile);
+    if(pid > 0){
+        // kill -s 0 checks if the PID is active but doesn't send a signal.
+        if(!kill(pid, 0))
+            return pid;
     }
     return 0;
 }
