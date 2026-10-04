@@ -73,10 +73,44 @@ void stop_macros(usbdevice* kb){
 
 // Default macro keystroke delay
 #define NANOSECONDS_PER_MILLISECONDS 1000000
-const struct timespec macrodelay = { .tv_nsec = 1 * NANOSECONDS_PER_MILLISECONDS };
 // Default and max values for macro repetition delays/debounces
 #define REPETITION_DEFAULT_VALUE 500
 #define REPETITION_MAX_VALUE 2000
+
+// rand() supplies at least 15 bits, but RAND_MAX need not be 2^n - 1.
+// Reject the partial final block, then combine all 32 bits without gaps.
+static uint32_t macro_random15(void){
+    const uint64_t range = (uint64_t)RAND_MAX + 1;
+    const uint64_t limit = range - range % 32768;
+    uint32_t sample;
+    do { sample = (uint32_t)rand(); } while(sample >= limit);
+    return sample & 0x7fff;
+}
+
+static pthread_mutex_t macro_random_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t macro_random32(void){
+    pthread_mutex_lock(&macro_random_mutex);
+    const uint32_t first = macro_random15();
+    const uint32_t second = macro_random15();
+    const uint32_t third = macro_random15();
+    pthread_mutex_unlock(&macro_random_mutex);
+    return (first << 17) | (second << 2) | (third & 3);
+}
+
+// Inclusive [min,max], including zero. Only UINT32_MAX means default delay;
+// an explicit fixed zero emits and synchronizes its event without sleeping.
+static uint32_t macro_action_delay(const macroaction* action){
+    if(action->delay == UINT32_MAX)
+        return 1000;
+    if(!action->delay_max || action->delay_max <= action->delay)
+        return action->delay;
+    const uint64_t span = (uint64_t)action->delay_max - action->delay + 1;
+    const uint64_t range = UINT64_C(1) << 32;
+    const uint64_t limit = range - range % span;
+    uint32_t sample;
+    do { sample = macro_random32(); } while(sample >= limit);
+    return action->delay + (uint32_t)(sample % span);
+}
 
 // Interruptible action delay. imutex is held on entry/return; a wake-up caused
 // by a trigger must not shorten the requested delay. Split long waits because
@@ -147,23 +181,7 @@ static void* play_macro(void* param){
             queued_mutex_unlock(mmutex(kb));
             if(action->rel_x || action->rel_y)
                 continue;
-            uint32_t delay_us = 1000;
-            if(action->delay != UINT32_MAX && action->delay){
-                if(action->delay_max){
-                        // Generate a random delay in the range requested
-                        // First, we need a random number that can be as large as uint32_t
-                        // RAND_MAX can be as low as 0x7fff
-                        uint16_t second = rand() & 0x7fff;
-                        uint16_t first = rand() & 0x7fff;
-                        uint32_t final = ((uint32_t)first << 17);
-                        final |= (second << 1);
-                        // Now that we have a sufficently large random number, range it appropriately
-                        final = ((uint64_t)action->delay + (uint64_t)final) % (action->delay_max - action->delay);
-                        delay_us = final;
-                } else
-                    delay_us = action->delay;
-            }
-            macro_delay(ptr, delay_us);
+            macro_delay(ptr, macro_action_delay(action));
         }
         if(ptr->abort)
             break;
