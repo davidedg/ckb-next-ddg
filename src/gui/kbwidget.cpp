@@ -59,6 +59,17 @@ KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector
         connect(device, &Kb::profileChanged, this, [this](){ updateK95SaveButtons(); });
         connect(device, &Kb::modeChanged, this, [this](){ updateK95SaveButtons(); });
         if(device->k95HwSlots()){
+            connect(device, &Kb::k95MigrationFailed, this, [this](){
+                auto* dialog = new QMessageBox(QMessageBox::Warning, tr("Hardware profile migration"),
+                    tr("The settings backup could not be verified. Your profiles have been kept unchanged and hardware "
+                       "saving is unavailable. Check that the settings directory is writable and has free space, then retry."),
+                    QMessageBox::Retry | QMessageBox::Close, this);
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                connect(dialog, &QMessageBox::finished, device, [this](int result){
+                    if(result == QMessageBox::Retry) device->retryK95Migration();
+                });
+                dialog->open();
+            });
             // hwslot1: the modes of the hardware profile have their own Binding tab (the bindings of the slot's draft)
             connect(ui->hwBindWidget, &HwBindWidget::draftChanged, this, [this](){
                 device->k95DraftChanged(device->currentProfile()->indexOf(device->currentMode()));

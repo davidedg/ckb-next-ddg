@@ -57,14 +57,14 @@ public:
     // This function migrates existing settings to the new location.
     static void migrateSettings(bool macFormat);
 
-    // The hardware profile of a K95 RGB Platinum (hwslot1) turns into exactly the three on-board slots and drops the modes it had
-    // beyond them: before any of that, the whole settings are copied once to a backup of their own (without raising the
-    // settings version, which would make an older GUI warn about a downgrade). Returns the name of the backup, "none" when there
-    // were no device settings to keep, or "" when it had already been done (the name is kept in Program/K95PHwBackup).
-    static QString k95pHwBackupOnce(QSettings& settings);
-    // The same on the settings of the program, taken by the migration itself (Kb::migrateK95HwProfile()), so that nothing is
-    // backed up for a device or a daemon that never migrates
-    static QString k95pHwBackupOnce();
+    // Before the destructive K95P migration, persist and verify a complete copy.
+    // A marker is accepted only while its backup is readable. Failure never
+    // authorizes migration and never leaves a success marker in memory.
+    enum HwBackupStatus { BackupCreated, BackupValid, BackupNotNeeded, BackupFailed };
+    // Returns the newly created backup name, "none" for no device data, or an
+    // empty string for an existing backup or failure (distinguished by status).
+    static QString k95pHwBackupOnce(QSettings& settings, HwBackupStatus* status = nullptr);
+    static QString k95pHwBackupOnce(HwBackupStatus* status = nullptr);
 
     // One-shot get/set
     static QVariant get(const QString& key, const QVariant& defaultValue = QVariant());

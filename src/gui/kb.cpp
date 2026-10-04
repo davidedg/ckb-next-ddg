@@ -512,7 +512,6 @@ void Kb::migrateK95HwProfile(KbProfile* profile){
     // slot i, and its GUIDs were rewritten by position on every load. The first three modes become the slots (their name, id
     // and colours are kept until the cache replaces them; animations, bindings, events and performance are software things
     // and go), every mode after them is dropped. The backup of the settings, taken first (once), still has them.
-    CkbSettings::k95pHwBackupOnce();
     foreach(KbProfile* other, _profiles){
         if(other != profile && other->id().guid == profile->id().guid){
             other->newId();
@@ -825,8 +824,27 @@ void Kb::run(){
     qDebug() << "Notify thread returning. Read" << line.length() << "isOpen()" << notify.isOpen();
 }
 
+void Kb::retryK95Migration(){
+    if(k95MigrationBlocked && k95CacheBatch && k95CacheBatch->state() == HwCacheBatch::Complete)
+        applyK95CacheBatch();
+}
+
 void Kb::applyK95CacheBatch(){
     if(!k95CacheBatch || k95CacheBatch->state() != HwCacheBatch::Complete) return;
+    // No profile identity, name, mode or binding may change before this succeeds.
+    if(_k95HwSlots && !k95Migrated){
+        CkbSettings::HwBackupStatus status;
+        CkbSettings::k95pHwBackupOnce(&status);
+        if(status == CkbSettings::BackupFailed){
+            k95MigrationBlocked = true;
+            k95CacheReady = false;
+            emit k95CacheFinished(false);
+            decideK95Mode(); // Unconverted profiles remain usable in software mode.
+            QTimer::singleShot(0, this, [this](){ emit k95MigrationFailed(); });
+            return;
+        }
+        k95MigrationBlocked = false;
+    }
     const HwCacheBatch::Result& data = k95CacheBatch->result();
     // The load of the record of one slot read on demand, or the attach or the read-back of a save
     const int readSlot = k95ReadBatchSlot;

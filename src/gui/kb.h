@@ -191,7 +191,7 @@ public:
     // apart from the software profiles: no mode is added to it, deleted or moved, and the profile is not renamed, duplicated or
     // deleted. Without the token all of these give what they give for any other keyboard.
     bool k95HwSlots() const { return _k95HwSlots; }
-    bool isHwSlotProfile(const KbProfile* profile) const { return _k95HwSlots && profile && profile == _hwProfile; }
+    bool isHwSlotProfile(const KbProfile* profile) const { return _k95HwSlots && k95Migrated && profile && profile == _hwProfile; }
     bool canAddMode(const KbProfile* profile) const { return profile && !isHwSlotProfile(profile); }
     bool canMoveModes(const KbProfile* profile) const { return profile && !isHwSlotProfile(profile); }
     bool canDeleteMode(const KbProfile* profile) const;
@@ -199,6 +199,7 @@ public:
     // The modes a software profile always has: hwModeCount without hwslot1, one with it
     int minimumModes(const KbProfile* profile) const { return !_k95HwSlots || isHwSlotProfile(profile) ? hwModeCount : 1; }
     bool k95HwMigrated() const { return k95Migrated; }
+    void retryK95Migration();
     // hwslot1: with the hardware profile selected the keyboard is in hardware mode (the daemon was sent "idle"): the GUI sends
     // it no frames, bindings or settings. Which mode it starts in is decided when the first cache load ends (or fails, or
     // after k95DecisionTimeoutMs); until then the GUI sends neither "active" nor "idle".
@@ -305,6 +306,7 @@ signals:
     void hwSaveLine(const QString& line);
     void k95CacheRequest(const QString& line);
     void k95CacheFinished(bool complete);
+    void k95MigrationFailed();
     // hwslot1: the slot changed on the keyboard under a draft with changes of its own (k95ResolveConflict)
     void k95DraftConflict(int slot);
     void k95DraftUpdated(int slot);
@@ -438,6 +440,7 @@ private:
     bool k95ReplayingCache = false;
     QString deferredPollRate;
     bool _k95HwSlots = false;
+    bool k95MigrationBlocked = false;
     // The hardware profile was turned into the three slots (once per device, kept in Devices/<serial>/K95PHwMigrated), and
     // its GUID (Devices/<serial>/K95PHwProfile), so that it is known before the daemon's cache arrives
     bool k95Migrated = false;
