@@ -160,15 +160,20 @@ QString CkbSettings::k95pHwBackupOnce(QSettings& settings, HwBackupStatus* statu
     }
     QMap<QString, QVariant> expected;
     const QString prefix = deviceSnapshot ? devicePath + '/' : QString();
-    for(const QString& settingKey : settings.allKeys()){
+    const QStringList sourceKeys = settings.allKeys();
+    for(const QString& settingKey : sourceKeys){
         if(!deviceSnapshot || !settingKey.startsWith(prefix))
             expected.insert(settingKey, settings.value(settingKey));
-        else
-            expected.insert(QStringLiteral("Program/K95PHwOriginal/") + settingKey, settings.value(settingKey));
     }
-    if(deviceSnapshot)
+    if(deviceSnapshot){
+        // A restored backup may already contain an archive. Keep its other
+        // entries, but current device values must win over older archived ones.
+        for(const QString& settingKey : sourceKeys)
+            if(settingKey.startsWith(prefix))
+                expected.insert(QStringLiteral("Program/K95PHwOriginal/") + settingKey, settings.value(settingKey));
         for(auto it = deviceSnapshot->constBegin(); it != deviceSnapshot->constEnd(); ++it)
             expected.insert(prefix + it.key(), it.value());
+    }
     const bool devices = settings.childGroups().contains("Devices") || (deviceSnapshot && !deviceSnapshot->isEmpty());
     const QString previous = settings.value(key).toString();
     if((previous == "none" && !devices) || (!previous.isEmpty() && previous != "none" && readableBackup(previous) &&
