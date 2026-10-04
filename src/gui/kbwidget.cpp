@@ -65,7 +65,7 @@ KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector
                        "saving is unavailable. Check that the settings directory is writable and has free space, then retry."),
                     QMessageBox::Retry | QMessageBox::Close, this);
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
-                connect(dialog, &QMessageBox::finished, device, [this](int result){
+                connect(dialog, &QMessageBox::finished, this, [this](int result){
                     if(result == QMessageBox::Retry) device->retryK95Migration();
                 });
                 dialog->open();
