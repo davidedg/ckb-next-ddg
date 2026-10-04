@@ -39,7 +39,7 @@ void urldecode2(char* dst, const char* src){
 }
 
 void urlencode2(char* dst, const char* src){
-    char s;
+    unsigned char s;
     while((s = *src++)){
         if(s <= ',' || s == '/' ||
                 (s >= ':' && s <= '@') ||
