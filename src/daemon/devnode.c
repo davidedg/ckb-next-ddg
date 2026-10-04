@@ -30,17 +30,28 @@ pid_t is_pid_running(void){
         return 0;
     char text[64];
     pid_t pid = 0;
-    if(fgets(text, sizeof(text), pidfile)){
+    size_t length = 0;
+    int valid = 1;
+    int c;
+    // Read bytes, not a C string: fgets consumes embedded NULs but strtol
+    // would stop at the first one and silently accept the hidden suffix.
+    while((c = fgetc(pidfile)) != EOF){
+        if(length < sizeof(text) - 1)
+            text[length++] = (char)c;
+        else if(!isspace((unsigned char)c))
+            valid = 0;
+    }
+    if(length && !ferror(pidfile)){
+        if(memchr(text, '\0', length))
+            valid = 0;
+        text[length] = '\0';
         char* end;
         errno = 0;
         const long value = strtol(text, &end, 10);
-        int valid = end != text && errno != ERANGE && value > 0 && value <= INT_MAX;
+        valid = valid && end != text && errno != ERANGE && value > 0 && value <= INT_MAX;
         while(*end && isspace((unsigned char)*end)) ++end;
         if(*end) valid = 0;
-        int c;
-        while((c = fgetc(pidfile)) != EOF)
-            if(!isspace((unsigned char)c)) valid = 0;
-        if(valid && !ferror(pidfile))
+        if(valid)
             pid = (pid_t)value;
     }
     fclose(pidfile);
