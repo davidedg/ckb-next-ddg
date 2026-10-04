@@ -616,6 +616,7 @@ static int txn_edit(usbdevice* kb, const cape_stage_txn* t, unsigned slot, int f
     if(t->has_name){
         ce->e.name = t->name;
         ce->e.name_units = t->name_units;
+        ce->e.name_exact = 1;
     }
     uint8_t id[CAPE_SLOTID_SIZE];
     cape_hw_synth_id(kb->serial, (int)slot, NULL, id);

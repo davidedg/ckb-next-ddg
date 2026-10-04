@@ -80,6 +80,7 @@ typedef struct {
     size_t leds;
     const uint16_t* name;         // the name of the mode, UTF-16 (NULL or no units: keep the slot's)
     size_t name_units;
+    int name_exact;               // full name from hwslot: compare exactly; zero preserves legacy name-command truncation
     const uint8_t* guid;          // 16 bytes, the GUID of the profile made in an empty slot (ignored for one that has a GUID)
     const uint8_t (*order)[3];    // NULL, or the colours of the layers in the order to write them (cape_light_pack_ordered): what the
     size_t norder;                // tests that compare the files with iCUE's own saves use; nobody else has a reason to

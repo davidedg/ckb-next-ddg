@@ -387,10 +387,10 @@ static size_t cut_units(const uint16_t* s, size_t n, size_t max){
 // The name in the GUI is the name of the slot, or the first units of it: the daemon and the GUI hold fewer units than PROFILE.I
 // does. hwload hands over 16 units (15 if the 16th is the first half of a surrogate pair), and a name that comes back from the
 // GUI with the name command is cut again by u16enc() (profile.c), which keeps 15 units (14 if the 15th is the first half of a pair)
-static int name_is_same(const uint16_t* old, size_t nold, const uint16_t* edit, size_t nedit){
+static int name_is_same(const uint16_t* old, size_t nold, const uint16_t* edit, size_t nedit, int exact){
     if(nedit == nold)
         return !memcmp(old, edit, nedit * sizeof(*edit));
-    if(nedit >= nold || nedit > CAPE_SLOT_GUI_NAME_UNITS)
+    if(exact || nedit >= nold || nedit > CAPE_SLOT_GUI_NAME_UNITS)
         return 0;
     if(memcmp(old, edit, nedit * sizeof(*edit)) != 0)
         return 0;
@@ -568,7 +568,7 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
             info = old->info;
             uint16_t units[CAPE_INFO_NAME_UNITS + 1];
             const int nold = cape_info_get_name(&info, units, sizeof(units) / sizeof(units[0]));
-            plan->name_changed = nedit > 0 && !name_is_same(units, nold < 0 ? 0 : (size_t)nold, edit->name, nedit);
+            plan->name_changed = nedit > 0 && !name_is_same(units, nold < 0 ? 0 : (size_t)nold, edit->name, nedit, edit->name_exact);
             if(nb){
                 char why[CAPE_BIND_WHY];
                 if(cape_binding_check(nb, bind_model ? &old->bind : NULL, why, sizeof(why)) != CAPE_OK){
