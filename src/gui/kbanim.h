@@ -11,7 +11,6 @@
 class KbAnim : public QObject
 {
     Q_OBJECT
-    Q_ENUMS(Mode)
 public:
     // Blending modes
     enum Mode {
@@ -21,6 +20,7 @@ public:
         Multiply,
         Divide
     };
+    Q_ENUM(Mode)
 
     // Load an animation from settings
     KbAnim(QObject* parent, const KeyMap& map, const QUuid id, CkbSettingsBase &settings);
