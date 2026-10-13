@@ -120,14 +120,17 @@ void KeyWidget::map(const KeyMap& newMap){
     selection = QBitArray(keyMap.count());
     newSelection = QBitArray(keyMap.count());
     animation = QBitArray(keyMap.count());
-    _aspectRatio = keyMap.width() / (float)keyMap.height();
-    if(keyMap.isKeyboard())
-        _aspectRatio -= 0.35;
-    else if(keyMap.isMousepad())
-        _aspectRatio += 0.35;
-    // (pick mode: the map's own proportions with the margin calculateDrawInfo() keeps)
-    if(_pickMode)
-        _aspectRatio = (keyMap.width() + KEY_SIZE) / float(keyMap.height() + KEY_SIZE);
+    _aspectRatio = 0.5f;
+    if(keyMap.width() > 0 && keyMap.height() > 0){
+        _aspectRatio = keyMap.width() / (float)keyMap.height();
+        if(keyMap.isKeyboard())
+            _aspectRatio -= 0.35;
+        else if(keyMap.isMousepad())
+            _aspectRatio += 0.35;
+        // (pick mode: the map's own proportions with the margin calculateDrawInfo() keeps)
+        if(_pickMode)
+            _aspectRatio = (keyMap.width() + KEY_SIZE) / float(keyMap.height() + KEY_SIZE);
+    }
     update();
     updateGeometry();
 
