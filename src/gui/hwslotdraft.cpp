@@ -19,10 +19,12 @@ void replace(Draft& d, const HwBinding::Record& record, bool hasRecord){
     if(!hasRecord)
         return;
     d.base = record.id;
+    d.lighting = record.lighting;
+    d.baseLighting = record.lighting;
     d.hasBindings = record.state == HwBinding::Record::OK || record.state == HwBinding::Record::EMPTY;
     if(d.hasBindings)
         d.keys = record.keys;
-    // the performance settings whatever the bindings are (RAW and BROKEN ones too)
+    // the performance settings as the record has them (a slot that cannot be rewritten has its indicator colours, if any)
     d.hasWinlock = record.hasWinlock;
     d.winlock = record.hasWinlock ? record.winlock : 0x01;
     d.hasIndicators = record.hasIndicators;
@@ -95,23 +97,24 @@ bool flag(const std::string& word, const char* name, bool& out){
 
 } // namespace
 
-// v:3 base:<id|-> mod:<0|1> hb:<0|1> wl:<hh|-> ind:<24 hex|-> rc:<0|1> rl:<0|1>, then m:<key>:<dst> and
-// a:<key>:<sub>:<start>:<run>:<rep>:<events> (each event as in the file: four or eight hex digits by its first byte) in
-// ascending order of key. v:2 (an earlier version) had four hex digits per event, the delays in 15 bits: it is read so, and a delay of
-// 16 384 ms or more (first byte c0..ff, which is the start of a 4-byte event now) becomes the long delay of iCUE's form; a0..bf
-// stays as it is (a 2-byte delay iCUE reads in 13 bits, kept). "-" is a value the draft does not
-// know. The conflict is not kept: the next record decides again. v:1 (before the performance settings) had wl:<hh> and no ind: it is read with neither
-// known, and its wl: is not taken (that GUI had no editor of the Win Lock options, and wrote 01 for bindings that were not a model)
+// Unversioned experimental format. The two complete lighting bodies precede the binding words.
+// Old drafts are test material and are intentionally rejected, without migration or backup.
 std::string serialize(const Draft& d){
     std::ostringstream out;
-    out << "v:3 base:" << (d.base.empty() ? "-" : d.base) << " mod:" << (d.modified ? 1 : 0) << " hb:" << (d.hasBindings ? 1 : 0)
+    out << "base:" << (d.base.empty() ? "-" : d.base) << " mod:" << (d.modified ? 1 : 0) << " hb:" << (d.hasBindings ? 1 : 0)
         << " wl:";
     if(d.hasWinlock) hex2(out, d.winlock);
     else out << '-';
     out << " ind:";
     if(d.hasIndicators) for(uint8_t v : d.indicators) hex2(out, v);
     else out << '-';
-    out << " rc:" << (d.recreate ? 1 : 0) << " rl:" << (d.replaceLights ? 1 : 0);
+    std::vector<std::string> lighting, baseLighting;
+    std::string error;
+    if(!HwLighting::write(d.lighting, lighting, error) || !HwLighting::write(d.baseLighting, baseLighting, error)) return {};
+    out << " base-light";
+    for(const auto& word : baseLighting) out << ' ' << word;
+    out << " draft-light";
+    for(const auto& word : lighting) out << ' ' << word;
     if(!d.hasBindings)
         return out.str();
     for(unsigned k = 0; k < HwBinding::KEYS; ++k){
@@ -126,6 +129,8 @@ std::string serialize(const Draft& d){
                 hex2(out, e.b0); hex2(out, e.b1);
                 if(e.size() == 4){ hex2(out, e.b2); hex2(out, e.b3); }
             }
+            if(a.imitateMs) out << ":im=" << a.imitateMs;
+            if(!a.text.empty()) out << ":tx=" << HwBinding::encode(a.text);
         }
     }
     return out.str();
@@ -137,34 +142,35 @@ bool deserialize(const std::string& line, Draft& d){
     std::vector<std::string> w;
     std::string word;
     while(in >> word) w.push_back(word);
-    const bool v1 = !w.empty() && w[0] == "v:1";
-    const bool v3 = !w.empty() && w[0] == "v:3";
-    const size_t fixed = v1 ? 7 : 8;   // the words before the bindings
-    bool ok = w.size() >= fixed && (v1 || v3 || w[0] == "v:2") && w[1].compare(0, 5, "base:") == 0 && w[1].size() > 5 &&
-              flag(w[2], "mod", r.modified) && flag(w[3], "hb", r.hasBindings) && w[4].compare(0, 3, "wl:") == 0 &&
-              flag(w[fixed - 2], "rc", r.recreate) && flag(w[fixed - 1], "rl", r.replaceLights);
+    const size_t fixed = 6;
+    bool ok = w.size() > fixed && w[0].compare(0, 5, "base:") == 0 && w[0].size() > 5 &&
+              flag(w[1], "mod", r.modified) && flag(w[2], "hb", r.hasBindings) && w[3].compare(0, 3, "wl:") == 0 && w[5] == "base-light";
     unsigned v = 0;
     if(ok){
-        r.base = w[1].substr(5) == "-" ? std::string() : w[1].substr(5);
-        if(v1)
-            ok = w[4].size() == 5 && byte(w[4], 3, v);   // read, and not taken
-        else if(w[4] != "wl:-"){
-            ok = w[4].size() == 5 && byte(w[4], 3, v);
+        r.base = w[0].substr(5) == "-" ? std::string() : w[0].substr(5);
+        ok = r.base.empty() || HwBinding::validId(r.base);
+        if(w[3] != "wl:-"){
+            ok = ok && w[3].size() == 5 && byte(w[3], 3, v);
             r.hasWinlock = true;
             r.winlock = uint8_t(v);
         }
     }
-    if(ok && !v1 && w[5] != "ind:-"){
-        ok = w[5].size() == 4 + 2 * r.indicators.size() && w[5].compare(0, 4, "ind:") == 0;
+    if(ok && w[4] != "ind:-"){
+        ok = w[4].size() == 4 + 2 * r.indicators.size() && w[4].compare(0, 4, "ind:") == 0;
         for(size_t j = 0; ok && j < r.indicators.size(); ++j){
-            ok = byte(w[5], 4 + 2 * j, v);
+            ok = byte(w[4], 4 + 2 * j, v);
             r.indicators[j] = uint8_t(v);
         }
         r.hasIndicators = ok;
     }
-    if(ok && !r.hasBindings && w.size() != fixed) ok = false;
+    size_t bindings = fixed;
+    std::string error;
+    if(ok) ok = HwLighting::read(w, bindings, r.baseLighting, error);
+    if(ok) ok = bindings < w.size() && w[bindings++] == "draft-light";
+    if(ok) ok = HwLighting::read(w, bindings, r.lighting, error);
+    if(ok && !r.hasBindings && w.size() != bindings) ok = false;
     int last = -1;
-    for(size_t i = fixed; ok && i < w.size(); ++i){
+    for(size_t i = bindings; ok && i < w.size(); ++i){
         const std::vector<std::string> f = split(w[i], ':');
         unsigned key = 0;
         ok = f.size() >= 3 && f[1].size() == 2 && byte(f[1], 0, key) && key < HwBinding::KEYS && int(key) > last;
@@ -176,10 +182,24 @@ bool deserialize(const std::string& line, Draft& d){
             ok = f[2].size() == 2 && byte(f[2], 0, dst);
             a.kind = HwBinding::Action::REMAP;
             a.dst = uint8_t(dst);
-        } else if(f[0] == "a" && f.size() == 7){
+        } else if(f[0] == "a" && f.size() >= 7 && f.size() <= 9){
             unsigned field[4];
             for(int j = 0; ok && j < 4; ++j) ok = f[size_t(j) + 2].size() == 2 && byte(f[size_t(j) + 2], 0, field[j]);
             ok = ok && f[6].size() % 4 == 0;
+            // im= and then tx=, each at most once
+            for(size_t j = 7; ok && j < f.size(); ++j){
+                if(f[j].compare(0, 3, "im=") == 0 && j == 7 && !a.imitateMs){
+                    unsigned long ms = 0;
+                    const std::string n = f[j].substr(3);
+                    ok = !n.empty() && n.size() <= 9 && n.find_first_not_of("0123456789") == std::string::npos && n[0] != '0';
+                    if(ok) ms = std::stoul(n);
+                    ok = ok && ms > HwBinding::IMITATE_FILE_MAX && ms <= HwBinding::IMITATE_MAX;
+                    a.imitateMs = ms;
+                } else if(f[j].compare(0, 3, "tx=") == 0 && j + 1 == f.size())
+                    ok = f[j].size() > 3 && HwBinding::decode(f[j].substr(3), a.text) && HwBinding::validUtf8(a.text);
+                else
+                    ok = false;
+            }
             if(!ok) break;
             a.kind = HwBinding::Action::MACRO;
             a.subtype = uint8_t(field[0]); a.start = uint8_t(field[1]); a.run = uint8_t(field[2]); a.repeat = uint8_t(field[3]);
@@ -189,11 +209,7 @@ bool deserialize(const std::string& line, Draft& d){
                 if(!ok) break;
                 HwBinding::Event ev;
                 ev.b0 = uint8_t(b0); ev.b1 = uint8_t(b1);
-                if(!v3){
-                    // a 2-byte delay of 15 bits; from 16 384 ms its first byte would read as a 4-byte event: iCUE's long form
-                    if(b0 >= 0xc0) ev = HwBinding::delay((b0 & 0x7f) << 8 | b1);
-                    e += 4;
-                } else if(ev.size() == 4){
+                if(ev.size() == 4){
                     unsigned b2 = 0, b3 = 0;
                     ok = e + 8 <= f[6].size() && byte(f[6], e + 4, b2) && byte(f[6], e + 6, b3);
                     ev.b2 = uint8_t(b2); ev.b3 = uint8_t(b3);
@@ -202,6 +218,8 @@ bool deserialize(const std::string& line, Draft& d){
                     e += 4;
                 if(ok) a.events.push_back(ev);
             }
+            // an interval only for the longest Imitate, a string only for a Text
+            ok = ok && (!a.imitateMs || a.longestImitate()) && (a.text.empty() || a.subtype == HwBinding::TEXT);
         } else
             ok = false;
     }

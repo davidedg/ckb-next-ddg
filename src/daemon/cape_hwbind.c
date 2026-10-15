@@ -1,4 +1,5 @@
 #include "cape_hwbind.h"
+#include "cape_lightmodel.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -97,9 +98,9 @@ static unsigned cut_text(const uint8_t* s, size_t n, size_t* end, unsigned max){
     return pieces;
 }
 
-static void add_text(words* w, const char* prefix, const uint8_t* s, size_t n){
-    size_t end[CAPE_HWSLOT_NAME_WORDS];
-    const unsigned pieces = cut_text(s, n, end, CAPE_HWSLOT_NAME_WORDS);
+static void add_text_max(words* w, const char* prefix, const uint8_t* s, size_t n, unsigned max){
+    size_t end[CAPE_HWSLOT_TX_WORDS > CAPE_HWSLOT_NAME_WORDS ? CAPE_HWSLOT_TX_WORDS : CAPE_HWSLOT_NAME_WORDS];
+    const unsigned pieces = cut_text(s, n, end, max);
     if(!pieces){
         if(!w->err)
             w->err = CAPE_E_RANGE;
@@ -114,6 +115,45 @@ static void add_text(words* w, const char* prefix, const uint8_t* s, size_t n){
         }
         add(w, "%s:%u/%u:%s", prefix, i + 1, pieces, enc);
         start = end[i];
+    }
+}
+
+static void add_text(words* w, const char* prefix, const uint8_t* s, size_t n){
+    add_text_max(w, prefix, s, n, CAPE_HWSLOT_NAME_WORDS);
+}
+
+// A press, the delay c0 ff ff ff and a release: the file of iCUE's 'Imitate holding key' on press at its longest
+static int longest_imitate(const cape_binding_action* a){
+    if(a->nevents != 3)
+        return 0;
+    const cape_event* d = &a->events[1];
+    return d->b0 == 0xc0 && d->b1 == 0xff && d->b2 == 0xff && d->b3 == 0xff;
+}
+
+// The action of the model on key k (the key of the files): the one the files of k were made of (cape_compile_bindings), or NULL
+static const cape_profile_action* model_action(const cape_profile_profile* m, unsigned k){
+    for(uint32_t i = 0; m && i < m->nbindings; i++){
+        const cape_profile_binding* b = &m->bindings[i];
+        if(b->key.len && b->layer == CAPE_PROFILE_LAYER_STANDARD && b->event == CAPE_PROFILE_EVENT_CLICK
+           && cape_profile_key(b->key.p, b->key.len) == (int)k)
+            return &b->action;
+    }
+    return NULL;
+}
+
+// What the files of a macro action cannot say and the model of the ZIP does: the interval of an Imitate on press longer than the
+// longest delay of a file, and the string of a Text (cape_hwslot.h)
+static void add_model_words(words* w, const cape_profile_profile* m, unsigned k, const cape_binding_action* a){
+    const cape_profile_action* x = model_action(m, k);
+    if(!x)
+        return;
+    if(x->kind == CAPE_PROFILE_REMAP && x->holding_enabled && x->holding_type == CAPE_PROFILE_HOLD_ON_PRESS && x->holding_interval > 16777215u
+       && longest_imitate(a))
+        add(w, "im:%02x:%u", k, (unsigned)x->holding_interval);
+    if(x->kind == CAPE_PROFILE_TEXT && a->subtype == CAPE_MACRO_TEXT && x->text.len){
+        char prefix[8];
+        snprintf(prefix, sizeof(prefix), "tx:%02x", k);
+        add_text_max(w, prefix, (const uint8_t*)x->text.p, x->text.len, CAPE_HWSLOT_TX_WORDS);
     }
 }
 
@@ -142,19 +182,6 @@ static void add_reason(words* w, const char* prefix, const char* why){
     add(w, "%s:%s", prefix, enc);
 }
 
-static const char* light_name(cape_hwbind_light l){
-    switch(l){
-    case CAPE_HWBIND_LIGHT_STATIC:
-        return "static";
-    case CAPE_HWBIND_LIGHT_EMPTY:
-        return "empty";
-    case CAPE_HWBIND_LIGHT_EFFECTS:
-        return "effects";
-    case CAPE_HWBIND_LIGHT_UNKNOWN:
-        break;
-    }
-    return "unknown";
-}
 
 static void add_events(words* w, const char* prefix, unsigned key, const cape_event* ev, unsigned n){
     // As many whole events as fit in CAPE_HWSLOT_EVENT_BYTES, as in the file (cape_hwslot.h)
@@ -180,26 +207,35 @@ static void add_events(words* w, const char* prefix, unsigned key, const cape_ev
     }
 }
 
+static int add_lighting_word(void* ctx, const char* word){
+    words* w = ctx;
+    add(w, "%s", word);
+    return w->err ? w->err : CAPE_OK;
+}
+
 static void make_words(const cape_hwbind_slot* s, words* w){
     const cape_binding_model* b = s->bind;
-    add(w, "v:1");
-    if(b->state == CAPE_BIND_EMPTY){
+    if(!s->entry){
         add(w, "id:0");
         add(w, "st:empty");
-        add(w, "lt:empty");
-        add(w, "ly:0");
+        add(w, "lights:known:0:0");
         add(w, "end");
         return;
     }
     char id[CAPE_HWSLOT_ID_MAX];
     cape_hwslot_id(s->entry, id);
     add(w, "id:%s", id);
-    if(b->state == CAPE_BIND_OK)
-        add(w, "st:ok");
-    else
-        add_reason(w, b->state == CAPE_BIND_RAW ? "st:raw" : "st:broken", b->reason);
-    if(s->readonly)
-        add_reason(w, "ro", s->readonly);
+    // A slot that cannot be rewritten: why, and of the rest only its name and indicator colours, if its PROFILE.I was read
+    const char* ro = s->readonly;
+    if(!ro && b->state != CAPE_BIND_OK)
+        ro = b->reason[0] ? b->reason : "the bindings of the slot are not a model";
+    add(w, ro ? "st:none" : "st:ok");
+    if(ro){
+        add_reason(w, "ro", ro);
+        if(s->zip != CAPE_ZIP_OK && s->zip != CAPE_ZIP_STALE)
+            add(w, "zip:%s", cape_zip_state_name(s->zip));
+    } else if(s->zip == CAPE_ZIP_STALE)
+        add(w, "zip:stale");
     if(s->name){
         uint8_t utf8[CAPE_INFO_NAME_UNITS * 3 + 1];
         const int n = cape_hwslot_utf8(s->name, s->name_units, utf8, sizeof(utf8));
@@ -209,7 +245,7 @@ static void make_words(const cape_hwbind_slot* s, words* w){
         }
         add_text(w, "nm", utf8, (size_t)n);
     }
-    if(b->winlock_read)
+    if(!ro && b->winlock_read)
         add(w, "wl:%02x", b->winlock);
     if(s->indicators){
         char hex[25];
@@ -217,9 +253,11 @@ static void make_words(const cape_hwbind_slot* s, words* w){
             snprintf(hex + 2 * i, 3, "%02x", s->indicators[i]);
         add(w, "ind:%s", hex);
     }
-    add(w, "lt:%s", light_name(s->light));
-    add(w, "ly:%u", s->layers);
-    if(b->state == CAPE_BIND_OK){
+    const cape_lightmodel lighting = { .known = !ro && s->model != NULL,
+        .layers = !ro && s->model ? s->model->layers : NULL, .count = !ro && s->model ? s->model->nlayers : 0 };
+    const int rc = cape_lightmodel_emit(&lighting, NULL, add_lighting_word, w);
+    if(rc != CAPE_OK){ w->err = rc; return; }
+    if(!ro){
         for(unsigned k = 0; k < CAPE_BIND_K95_KEYS; k++)
             if(b->key[k].kind == CAPE_BIND_REMAP)
                 add(w, "m:%02x:%02x", k, b->key[k].dst);
@@ -230,6 +268,7 @@ static void make_words(const cape_hwbind_slot* s, words* w){
             add(w, "a:%02x:%s:%02x:%02x:%02x:%02x:%u:%02x", k, a->file[0] ? a->file : "-", a->subtype, a->start, a->run, a->repeat,
                 a->nevents, a->flags);
             add_events(w, "e", k, a->events, a->nevents);
+            add_model_words(w, s->model, k, a);
         }
     }
     add(w, "end");
@@ -237,7 +276,7 @@ static void make_words(const cape_hwbind_slot* s, words* w){
 
 static size_t prefix_len(unsigned m, unsigned gen, unsigned p, unsigned pages){
     char tmp[64];
-    return (size_t)snprintf(tmp, sizeof(tmp), "mode %u hwbind %u %u/%u ", m, gen, p, pages);
+    return (size_t)snprintf(tmp, sizeof(tmp), "mode %u hwslot %u %u/%u ", m, gen, p, pages);
 }
 
 // Pages for a given count of pages (the prefix of each line depends on it): returns how many pages the words take that way
@@ -316,7 +355,7 @@ int cape_hwbind_line(const cape_hwbind_record* r, unsigned p, char* out, size_t 
         return CAPE_E_ARG;
     if(p < 1 || p > r->pages)
         return CAPE_E_RANGE;
-    int n = snprintf(out, cap, "mode %u hwbind %u %u/%u", r->m, r->gen, p, r->pages);
+    int n = snprintf(out, cap, "mode %u hwslot %u %u/%u", r->m, r->gen, p, r->pages);
     if(n < 0 || (size_t)n >= cap)
         return CAPE_E_CAP;
     size_t len = (size_t)n;
@@ -339,7 +378,7 @@ int cape_hwbind_line(const cape_hwbind_record* r, unsigned p, char* out, size_t 
 int cape_hwbind_error_line(unsigned m, unsigned gen, const char* why, char* out, size_t cap){
     if(!why || !out)
         return CAPE_E_ARG;
-    const int n = snprintf(out, cap, "mode %u hwbind %u error %s\n", m, gen, why);
+    const int n = snprintf(out, cap, "mode %u hwslot %u error %s\n", m, gen, why);
     if(n < 0 || (size_t)n >= cap)
         return CAPE_E_CAP;
     return n;

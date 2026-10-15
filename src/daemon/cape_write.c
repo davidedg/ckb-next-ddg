@@ -34,11 +34,11 @@ static int write_allowed(const cape_session* s, const uint8_t* p){
         return 0;
     switch(p[0]){
     case 0x0e:
-        // the size of the slot and "write mode" (the other 0e 17 packets are on the read list)
-        return p[1] == 0x17 && (p[2] == 0x03 || p[2] == 0x0b) && p[3] == 0x00 && tail_zero(p, 4);
+        // "write mode", the free bytes of the flash (the other 0e 17 packets, the size of the slot too, are on the read list)
+        return p[1] == 0x17 && p[2] == 0x0b && p[3] == 0x00 && tail_zero(p, 4);
     case 0x07:
         if(p[1] == 0x15){
-            // 07 15 SS 00, then 20 bytes that are all zero (clear) or a GUID that is not, a cookie and 00 01 (set)
+            // 07 15 SS 00, then 20 bytes that are all zero (clear) or a GUID that is not, a cookie of 24 bits and 01 (set)
             if(p[2] != w->target || p[3] != 0x00 || !tail_zero(p, 24))
                 return 0;
             int guid = 0, any = 0;
@@ -46,7 +46,7 @@ static int write_allowed(const cape_session* s, const uint8_t* p){
                 guid |= p[i] != 0;
             for(int i = 4; i < 24; i++)
                 any |= p[i] != 0;
-            return !any || (guid && p[22] == 0x00 && p[23] == 0x01);
+            return !any || (guid && p[23] == CAPE_SLOTID_FLAG);
         }
         if(p[1] != 0x17)
             return 0;
@@ -133,7 +133,7 @@ static int stop(cape_wsession* w, cape_write_report* rep, int err, unsigned tx0)
     return err;
 }
 
-// The GUID, cookie and "00 01" as the payload of 07 15 SS 00
+// The GUID, the cookie (24 bits) and the flag 01 as the payload of 07 15 SS 00
 static void set_packet(uint8_t* pkt, unsigned slot, const cape_slotid* id){
     pkt_init(pkt, 0x07, 0x15, (uint8_t)slot, 0x00);
     if(id)
@@ -149,7 +149,7 @@ static int check_arguments(const cape_slotid* id, const cape_slot_files* files){
     static const uint8_t zero[16] = { 0 };
     if(!id || !files || files->n == 0)
         return CAPE_E_ARG;
-    if(!memcmp(id->guid, zero, sizeof(zero)) || id->flags[0] != 0x00 || id->flags[1] != 0x01)
+    if(!memcmp(id->guid, zero, sizeof(zero)) || id->flag != CAPE_SLOTID_FLAG || id->cookie > CAPE_COOKIE_MAX)
         return CAPE_E_RANGE;
     const cape_slot_file* info = NULL;
     for(size_t i = 0; i < files->n; i++){
@@ -294,6 +294,54 @@ int cape_write_slot(cape_wsession* w, unsigned slot, const cape_slotid* id, cons
         return stop(w, rep, rc, tx0);
 
     w->target = -1;   // the write packets are refused again
+    rep->stage = CAPE_WSTAGE_DONE;
+    rep->slot = CAPE_WSLOT_WRITTEN;
+    rep->status = w->s.last_status;
+    rep->packets = w->s.tx_packets - tx0;
+    return CAPE_OK;
+}
+
+int cape_erase_slot(cape_wsession* w, unsigned slot, cape_write_report* rep){
+    cape_write_report local;
+    if(!rep)
+        rep = &local;
+    memset(rep, 0, sizeof(*rep));
+    rep->stage = CAPE_WSTAGE_PREPARE;
+    rep->slot = CAPE_WSLOT_UNCHANGED;
+    if(!w)
+        return rep->err = CAPE_E_ARG;
+    if(slot >= CAPE_SLOTS)
+        return rep->err = CAPE_E_RANGE;
+    if(!((w->mask >> slot) & 1))
+        return rep->err = CAPE_E_MASKED;
+    if(w->s.state == CAPE_S_REFUSED)
+        return rep->err = CAPE_E_FW;
+    if(w->s.state != CAPE_S_READY || !w->s.extra_allowed)
+        return rep->err = CAPE_E_BROKEN;
+
+    const unsigned tx0 = w->s.tx_packets;
+    uint8_t pkt[CAPE_PKT_SIZE];
+    int rc;
+    w->target = (int)slot;
+    rep->stage = CAPE_WSTAGE_CLEAR;
+    pkt_init(pkt, 0x07, 0x17, 0x0c, (uint8_t)slot);
+    if((rc = cape_tx(&w->s, pkt)) != CAPE_OK)
+        return stop(w, rep, rc, tx0);
+    w->s.slot = (int)slot;
+    // The clear of the GUID and the marker: the slot is empty
+    set_packet(pkt, slot, NULL);
+    rep->slot = CAPE_WSLOT_INCOMPLETE;
+    if((rc = cape_tx(&w->s, pkt)) != CAPE_OK)
+        return stop(w, rep, rc, tx0);
+    if((rc = cape_wait_status(&w->s, 0, CAPE_WRITE_STATUS_POLLS, CAPE_WRITE_STATUS_POLL_MS)) != CAPE_OK)
+        return stop(w, rep, rc, tx0);
+    pkt_init(pkt, 0x07, 0x17, 0x0e, 0x00);
+    if((rc = cape_tx(&w->s, pkt)) != CAPE_OK)
+        return stop(w, rep, rc, tx0);
+    cape_session_progress_step(&w->s);
+
+    w->target = -1;
+    memset(&w->s.slots[slot], 0, sizeof(w->s.slots[slot]));   // what the slot table says now
     rep->stage = CAPE_WSTAGE_DONE;
     rep->slot = CAPE_WSLOT_WRITTEN;
     rep->status = w->s.last_status;

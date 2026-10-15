@@ -24,7 +24,7 @@ std::string hex2(unsigned v){
 
 } // namespace
 
-bool icueValues(uint8_t subtype, uint8_t start, uint8_t run, uint8_t repeat){
+bool canonicalValues(uint8_t subtype, uint8_t start, uint8_t run, uint8_t repeat){
     if(subtype == HwBinding::SHORTCUT && start == START_PRESS && run == RUN_IMITATE_TOGGLE && repeat == 0)
         return true;   // 'Imitate holding key' Toggle
     if(repeat != 1)
@@ -39,7 +39,7 @@ bool icueValues(uint8_t subtype, uint8_t start, uint8_t run, uint8_t repeat){
 
 namespace {
 // A delay in the form iCUE writes: 2 bytes below 8192 ms, 4 from there
-bool icueDelay(const Event& e){
+bool canonicalDelay(const Event& e){
     const HwBinding::EventKind k = HwBinding::eventKind(e);
     return k == HwBinding::EV_DELAY || (k == HwBinding::EV_LONG && HwBinding::delayMs(e) > HwBinding::DELAY_SHORT_MAX);
 }
@@ -64,16 +64,20 @@ bool keystrokeKeysOffered(const std::vector<uint8_t>& keys);
 
 bool recognizeImitate(const Action& a, uint8_t& key, unsigned& ms, bool& toggle){
     key = 0; ms = 0; toggle = false;
-    if(!imitateShape(a) || !icueValues(a.subtype, a.start, a.run, a.repeat) || a.events.size() != 3) return false;
+    if(!imitateShape(a) || !canonicalValues(a.subtype, a.start, a.run, a.repeat) || a.events.size() != 3) return false;
     const Event& p = a.events[0];
     const Event& d = a.events[1];
     const Event& r = a.events[2];
-    if(HwBinding::eventKind(p) != HwBinding::EV_PRESS || r != HwBinding::release(p.b1) || !K95PKeyTable::icueKeyboard(p.b1)) return false;
+    if(HwBinding::eventKind(p) != HwBinding::EV_PRESS || r != HwBinding::release(p.b1) || !K95PKeyTable::keyboardKey(p.b1)) return false;
     toggle = a.run == RUN_IMITATE_TOGGLE;
     if(toggle){
-        if(HwBinding::eventKind(d) != HwBinding::EV_DELAY || HwBinding::delayMs(d) != 0) return false;
+        if(HwBinding::eventKind(d) != HwBinding::EV_DELAY || HwBinding::delayMs(d) != 0 || a.imitateMs) return false;
+    } else if(a.imitateMs){
+        // longer than the keyboard waits: its longest delay, and the interval of the slot's PROFILE.ZIP
+        if(!imitateClamp(d) || a.imitateMs <= IMITATE_MAX_MS || a.imitateMs > IMITATE_ARCHIVE_MAX_MS || a.imitateMs % 100) return false;
+        ms = unsigned(a.imitateMs);
     } else {
-        if(!icueDelay(d)) return false;
+        if(!canonicalDelay(d)) return false;
         ms = HwBinding::delayMs(d);
         if(ms < IMITATE_MIN_MS || ms > IMITATE_MAX_MS || ms % 100) return false;
     }
@@ -88,7 +92,9 @@ Action imitatePress(uint8_t key, unsigned ms){
     a.start = START_PRESS;
     a.run = RUN_ONCE;
     a.repeat = 1;
-    a.events = { press(key), delay(ms), release(key) };
+    // (longer than the keyboard waits: its longest delay, the interval kept for the slot's PROFILE.ZIP)
+    a.events = { press(key), delay(ms > IMITATE_MAX_MS ? HwBinding::DELAY_LONG_MAX : ms), release(key) };
+    if(ms > IMITATE_MAX_MS) a.imitateMs = ms;
     return a;
 }
 
@@ -103,17 +109,17 @@ Kind kindOf(const Action& a){
     if(a.kind == Action::NATIVE) return NATIVE;
     if(a.kind == Action::REMAP){
         if(a.dst >= K95PKeyTable::MOUSE_FIRST && a.dst <= K95PKeyTable::MOUSE_LAST) return REMAP_MOUSE;
-        if(K95PKeyTable::icueKeyboard(a.dst) || K95PKeyTable::icueMedia(a.dst)) return REMAP_KEYBOARD;
-        if(K95PKeyTable::icueLanguage(a.dst)) return REMAP_LANGUAGE;
+        if(K95PKeyTable::keyboardKey(a.dst) || K95PKeyTable::mediaKey(a.dst)) return REMAP_KEYBOARD;
+        if(K95PKeyTable::languageKey(a.dst)) return REMAP_LANGUAGE;
         return KEPT;
     }
-    if(!icueValues(a.subtype, a.start, a.run, a.repeat)) return KEPT;
+    if(!canonicalValues(a.subtype, a.start, a.run, a.repeat)) return KEPT;
     if(a.subtype == HwBinding::SHORTCUT){
         uint8_t key; unsigned ms; bool toggle;
         if(imitateShape(a)) return recognizeImitate(a, key, ms, toggle) ? (toggle ? IMITATE_TOGGLE : IMITATE_PRESS) : KEPT;
         if(a.run != RUN_ONCE) return KEPT;
         std::vector<uint8_t> keys;
-        return recognizeShortcut(a.events, keys) && isIcueShortcut(keys) && keystrokeKeysOffered(keys) ? SHORTCUT : KEPT;
+        return recognizeShortcut(a.events, keys) && isCanonicalShortcut(keys) && keystrokeKeysOffered(keys) ? SHORTCUT : KEPT;
     }
     if(a.subtype == HwBinding::MACRO){
         // every delay of 2 bytes and at most 4095 ms, a random one from at most to: as iCUE's editor makes them
@@ -201,12 +207,12 @@ bool shortcutKeys(std::vector<uint8_t>& keys, std::string& why){
 namespace {
 bool keystrokeKeysOffered(const std::vector<uint8_t>& keys){
     for(uint8_t k : keys)
-        if(modifierOf(k) < 0 && !K95PKeyTable::icueKeyboard(k)) return false;
+        if(modifierOf(k) < 0 && !K95PKeyTable::keyboardKey(k)) return false;
     return true;
 }
 } // namespace
 
-bool isIcueShortcut(const std::vector<uint8_t>& keys){
+bool isCanonicalShortcut(const std::vector<uint8_t>& keys){
     // Made again, they are the same keys only if they already kept the rules, in iCUE's order, with no right modifier
     std::vector<uint8_t> made = keys;
     std::string why;
@@ -341,7 +347,7 @@ Action text(const std::vector<Event>& ev){ return macroOf(HwBinding::TEXT, ev, S
 namespace {
 // The checks of one macro action, by its kind (the daemon's cape_binding_check, plus the shape of a Text's characters)
 bool checkMacro(const Action& a, std::string& why){
-    if(!icueValues(a.subtype, a.start, a.run, a.repeat)){ why = "not an action iCUE writes"; return false; }
+    if(!canonicalValues(a.subtype, a.start, a.run, a.repeat)){ why = "not an action iCUE writes"; return false; }
     if(a.events.empty() || a.events.size() > EVENTS_MAX){ why = "an action has 1 to " + std::to_string(EVENTS_MAX) + " events"; return false; }
     bool down[HwBinding::KEYS] = {};
     for(const Event& e : a.events){
@@ -384,7 +390,7 @@ bool checkMacro(const Action& a, std::string& why){
             uint8_t key; unsigned ms; bool toggle;
             // iCUE's clamp of longer times is iCUE's too (a copy of one of its slots brings it), though the editor never makes it
             const bool clamp = a.run == RUN_ONCE && a.events.size() == 3 && imitateClamp(a.events[1]) &&
-                               HwBinding::eventKind(a.events[0]) == HwBinding::EV_PRESS && K95PKeyTable::icueKeyboard(a.events[0].b1);
+                               HwBinding::eventKind(a.events[0]) == HwBinding::EV_PRESS && K95PKeyTable::keyboardKey(a.events[0].b1);
             if(!clamp && !recognizeImitate(a, key, ms, toggle)){
                 why = "not 'Imitate holding key' as iCUE writes it (a key of its keyboard, held 0.1 to 16777.2 s in steps of 0.1 s, "
                       "or toggled with a delay of 0)";
@@ -393,7 +399,7 @@ bool checkMacro(const Action& a, std::string& why){
             return true;
         }
         std::vector<uint8_t> keys;
-        if(a.run != RUN_ONCE || !recognizeShortcut(a.events, keys) || !isIcueShortcut(keys)){
+        if(a.run != RUN_ONCE || !recognizeShortcut(a.events, keys) || !isCanonicalShortcut(keys)){
             std::string rule;
             if(!keys.empty() && !shortcutKeys(keys, rule)) why = rule;
             else why = "not a shortcut iCUE writes (up to three of Win, Ctrl, Alt, Shift in this order, then one key)";
@@ -427,7 +433,7 @@ bool check(const HwBinding::Keys& draft, const HwBinding::Keys* base, std::strin
             continue;
         const std::string key = K95PKeyTable::label(k).empty() ? "#" + hex2(k) : K95PKeyTable::label(k);
         // (a destination that is neither a key nor a mouse button is none of iCUE's either)
-        if(a.kind == Action::REMAP && !K95PKeyTable::isIcueDestination(a.dst)){
+        if(a.kind == Action::REMAP && !K95PKeyTable::isSupportedDestination(a.dst)){
             const std::string dst = K95PKeyTable::label(a.dst);
             why = key + ": iCUE does not offer " + (dst.empty() ? "#" + hex2(a.dst) : dst) + " as a destination";
             return false;

@@ -89,7 +89,7 @@ public:
     // Keyboard model
     inline KeyMap::Model    model() const                       { return _model; }
     // Hardware profiles: the daemon can load them ("hwload") and the GUI may offer to save to them. The K95 RGB Platinum saves
-    // only through hwslot1 (a tested firmware, the cache loaded, no flow running): with a daemon without it the GUI
+    // only through hwslot (a tested firmware, the cache loaded, no flow running): with a daemon without it the GUI
     // saves nothing (the hwsave route is closed for it)
     bool                    hwSaveAllowed() const               { return hwload && (_model != KeyMap::K95P ||
                                                               (_k95HwSlots && k95FirmwareTested() && k95CacheReady && !_hwFlowBusy &&
@@ -169,9 +169,10 @@ public:
     void endHwFlow(); // only after a terminal notification (and refresh marker, if requested)
     bool hwFlowBusy() const { return _hwFlowBusy; }
     HwSavePipe::Result sendHwFlowLine(const std::string& line);
-    bool startK95CacheRefresh(unsigned mask, unsigned rgbRequired, std::string& request);
+    // requireChangedIds: the slots in mask must have new ids (a save); not after an erase (an empty slot erased again keeps "0")
+    bool startK95CacheRefresh(unsigned mask, unsigned rgbRequired, std::string& request, bool requireChangedIds = true);
     bool k95CacheIsReady() const { return k95CacheReady; }
-    // A K95 RGB Platinum whose daemon reads its on-board profiles ("hwload", or "hwslot1"): it has its own way to load and save
+    // A K95 RGB Platinum whose daemon reads its on-board profiles ("hwload", or "hwslot"): it has its own way to load and save
     // them, below. Without either (the daemon was started without --enable-experimental, or the firmware is not a tested one)
     // it is handled as every other keyboard, and a hardware profile made of its slots before is kept hidden (load(), save()).
     bool k95Onboard() const { return _model == KeyMap::K95P && (hwload || _k95HwSlots); }
@@ -184,9 +185,9 @@ public:
                firmware.app == CkbVersionNumber(QStringLiteral("3.29")) &&
                firmware.bld == CkbVersionNumber(QStringLiteral("3.03"));
     }
-    void invalidateK95Cache() { k95CacheReady = false; }
+    void invalidateK95Cache();
 
-    // hwslot1: a K95 RGB Platinum whose daemon offers "hwslot1" (a tested firmware and a daemon that reads, checks and saves the
+    // hwslot: a K95 RGB Platinum whose daemon offers "hwslot" (a tested firmware and a daemon that reads, checks and saves the
     // bindings of the slots). Its hardware profile is then exactly the three on-board slots, in the order of the firmware, kept
     // apart from the software profiles: no mode is added to it, deleted or moved, and the profile is not renamed, duplicated or
     // deleted. Without the token all of these give what they give for any other keyboard.
@@ -196,18 +197,18 @@ public:
     bool canMoveModes(const KbProfile* profile) const { return profile && !isHwSlotProfile(profile); }
     bool canDeleteMode(const KbProfile* profile) const;
     bool canManageProfile(const KbProfile* profile) const { return profile && !isHwSlotProfile(profile); }
-    // The modes a software profile always has: hwModeCount without hwslot1, one with it
+    // The modes a software profile always has: hwModeCount without hwslot, one with it
     int minimumModes(const KbProfile* profile) const { return !_k95HwSlots || isHwSlotProfile(profile) ? hwModeCount : 1; }
     bool k95HwMigrated() const { return k95Migrated; }
     void retryK95Migration();
-    // hwslot1: with the hardware profile selected the keyboard is in hardware mode (the daemon was sent "idle"): the GUI sends
+    // hwslot: with the hardware profile selected the keyboard is in hardware mode (the daemon was sent "idle"): the GUI sends
     // it no frames, bindings or settings. Which mode it starts in is decided when the first cache load ends (or fails, or
     // after k95DecisionTimeoutMs); until then the GUI sends neither "active" nor "idle".
     bool k95InHardwareMode() const { return k95InHw; }
     bool k95ModeDecided() const { return k95Decided; }
     static int k95DecisionTimeoutMs;
-    // hwslot1: the record of slot i (0..2) the daemon last read (the base), nullptr when there is none; the draft of the
-    // slot (its bindings; its name and colours are those of the mode of the hardware profile), nullptr without hwslot1
+    // hwslot: the record of slot i (0..2) the daemon last read (the base), nullptr when there is none; the draft of the
+    // slot (its bindings; its name and colours are those of the mode of the hardware profile), nullptr without hwslot
     const HwBinding::Record* k95SlotRecord(int i) const;
     HwSlotDraft::Draft* k95Draft(int i);
     // Whether the draft differs from its base (against the base itself when it is known, else as last known)
@@ -219,10 +220,16 @@ public:
     // The next record of these slots is the read-back of our own save: it replaces the drafts, and it must hold what they
     // held (else the cache is not ready: no further save until the keyboard is read again)
     void k95CommitOnRefresh(unsigned mask) { k95CommitMask |= mask & 7u; }
+    // The next record of these slots is the read-back of our own erase of them: it must be an empty slot, and it replaces the drafts
+    // (else the cache is not ready, as for a save)
+    void k95EraseOnRefresh(unsigned mask) { k95EraseMask |= mask & 7u; }
+    // The line that erases slot i (0..2): "@N hwslot erase:<m>:<base>\n", base the id the GUI knows the slot by (its record's, else
+    // the one of :hwid; "0" for an empty slot). false, with why, when there is none to send
+    bool k95EraseLine(int i, std::string& line, QString& why) const;
     // Whether the mode's colours of slot i differ from its base's (they count only where they are an image: static layers or
     // none)
     bool k95LightsChanged(int i) const;
-    // The slots of a save of the hardware profile (hwslot1): all three, or the one of index selected, each the lines of its
+    // The slots of a save of the hardware profile (hwslot): all three, or the one of index selected, each the lines of its
     // transaction; rgbRequired says which of them have lighting to read back after a save. false, with why, when one cannot
     // be prepared.
     bool k95SaveSlots(bool all, int selected, std::vector<HwSaveFlow::Slot>& saveSlots, std::array<bool, 3>& rgbRequired,
@@ -231,18 +238,16 @@ public:
     // physical keys are recorded, not the slot's remaps) and sends its key events to the macro node, until
     // k95StopRecording() (also when the GUI closes or the device goes) takes it back to hardware mode. Meanwhile the profile, the
     // mode and a save cannot change. Only from the hardware profile, with the cache loaded and no save running.
-    // Special slots: an empty one (a save makes a new profile in it), bindings recreated from scratch on a slot whose bindings
-    // are not a model, static colours instead of a slot's lighting effects; the name of a new profile is iCUE's ("HW Profile N")
+    // Special slots: an empty one (a save makes a new profile in it), static colours instead of a slot's lighting effects; the
+    // name of a new profile is iCUE's ("HW Profile N")
     bool k95SlotEmpty(int i) const;
     QString k95BaseName(int i) const;
-    void k95Recreate(int i, bool on);
-    void k95ReplaceLights(int i, bool on);
     // The performance settings of slot i: the draft's, else the slot's, else iCUE's defaults; set by the Performance HW tab
     HwSlotDraft::Perf k95Perf(int i) const;
     void k95SetPerf(int i, const HwSlotDraft::Perf& perf);
     void k95RestorePerfDefaults(int i);
     // Copies the performance settings of slot from to the slots to (hardware slots): at once to one that was read, after its read to
-    // one that was not (it is queued); the Win Lock bits iCUE never writes (4..7) stay the target's. Nothing is saved while one waits
+    // one that was not (it is queued); the Win Lock bits iCUE never writes (4..7) are not copied. Nothing is saved while one waits
     void k95CopyPerf(int from, const std::vector<int>& to);
     bool k95CopyPending() const { return k95PendingCopy[0] || k95PendingCopy[1] || k95PendingCopy[2]; }
     bool k95CopyPendingFor(int i) const { return i >= 0 && i < 3 && k95PendingCopy[size_t(i)]; }
@@ -257,6 +262,8 @@ public:
     unsigned k95ReadDone(int i) const { return i >= 0 && i < 3 ? k95ReadProgress[size_t(i)] : 0; }   // 0..1000
     QString k95ReadError(int i) const { return i >= 0 && i < 3 ? k95ReadWhy[size_t(i)] : QString(); }
     bool k95Reading() const { return k95ReadSlot >= 0; }
+    // Explicit Reload: discard the draft only after a complete fresh record succeeds.
+    bool k95ReloadSlot(int i);
     static int k95ReadGuardMs;   // no line of a read for this long: it failed (30 s; the tests make it shorter)
 
     KeyMap::Layout getCurrentLayout();
@@ -307,7 +314,7 @@ signals:
     void k95CacheRequest(const QString& line);
     void k95CacheFinished(bool complete);
     void k95MigrationFailed();
-    // hwslot1: the slot changed on the keyboard under a draft with changes of its own (k95ResolveConflict)
+    // hwslot: the slot changed on the keyboard under a draft with changes of its own (k95ResolveConflict)
     void k95DraftConflict(int slot);
     void k95DraftUpdated(int slot);
     void k95RecordingChanged(bool recording);
@@ -409,6 +416,7 @@ private:
     // Sends each mode's name to the daemon's in-memory profile
     void pushModeNames();
     void applyK95CacheBatch();
+    void rememberK95DraftChanges();
     // Emits modeCountExceeded() if the current profile has more modes than the
     // daemon supports, at most once per profile instance while it stays over
     KbProfile* modeCountWarnedProfile = nullptr;
@@ -453,6 +461,7 @@ private:
     int k95HiddenIndex = -1;
     std::array<HwSlotDraft::Draft, 3> k95Drafts;
     unsigned k95CommitMask = 0;
+    unsigned k95EraseMask = 0;
     void fillK95Mode(KbMode* target, const HwCacheBatch::Mode& mode, unsigned i);
     bool k95Rec = false;
     bool k95Decided = true;
@@ -461,12 +470,11 @@ private:
     void decideK95Mode();
     void enterK95Hw();
     // Nothing goes to the daemon for the current mode: the start is undecided, or the keyboard is in hardware mode
-    // The content of slot i in the GUI (the mode's name and colours, the draft's bindings) against a record of the slot: the
-    // flags of the draft (recreate, replaceLights) are not content
+    // The slot name, complete lighting draft, bindings and Performance against its record
     // (fallback: the base whose performance settings the draft's unknown ones are; NULL: cached's record)
     bool k95ContentDiffers(int i, const HwCacheBatch::Mode& cached, const HwBinding::Record* fallback = nullptr) const;
     bool k95NameDiffers(int i, const HwCacheBatch::Mode& cached) const;
-    bool k95ColoursDiffer(int i, const HwCacheBatch::Mode& cached) const;
+    bool k95LightingDiffers(int i, const HwCacheBatch::Mode& cached) const;
     bool k95Quiet() const { return _k95HwSlots && (!k95Decided || k95InHw); }
     std::array<K95Read, 3> k95Read{{K95_UNREAD, K95_UNREAD, K95_UNREAD}};
     std::array<unsigned, 3> k95ReadProgress{{0, 0, 0}};
@@ -474,6 +482,7 @@ private:
     std::vector<int> k95ReadQueue;
     int k95ReadSlot = -1;          // the slot being read: its "hwslot read:" was sent, and its record has not come yet
     int k95ReadBatchSlot = -1;     // k95CacheBatch is the load of the record of this slot, read on demand
+    unsigned k95ReloadMask = 0;   // explicit reloads waiting for complete records
     bool k95BatchDiscard = false;  // k95CacheBatch is such a load whose guard ran out: its late lines are taken and dropped
     QTimer* k95ReadTimer = nullptr;
     // The current mode of the hardware profile: read it if it never was, or, when the user opens it again (retry), if its read failed

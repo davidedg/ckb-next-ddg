@@ -10,7 +10,7 @@
  * cape_phase is the three parts of a save (cape_hwsave_run, cape_hwsave.h): reading the slot as it is (or taking
  * the Retry snapshot), the write itself, and reading it back to verify. A session that never writes is READ throughout
  * and never reports a change of phase. hwload at attach reports no progress (profile_cape.c gives it no cape_io.progress);
- * the read of one slot on demand and the check of a save through hwslot do (hwslot1: "hwread progress"
+ * the read of one slot on demand and the check of a save through hwslot do (hwslot: "hwread progress"
  * and "hwsavecheck progress", the second only as a heartbeat for the GUI's guard), over the whole scale: see
  * cape_progress_begin_alone().
  * It lives here, not in cape.h, because the progress bands below are defined in terms of it; cape.h includes this

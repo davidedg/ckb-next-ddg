@@ -109,10 +109,18 @@ static void log_bindings(const cape_binding_model* b, unsigned slot, cape_hwload
 static void take_slot(const cape_slot_image* img, unsigned slot, cape_hwload* out, cape_hwslot* hs, cape_logfn log, void* logctx){
     hs->present = 1;
     hs->light = img->light;
-    if(img->refused){
+    if(!img->info_ok){
         out->warnings++;
         say(log, logctx, CAPE_LOG_WARN, "slot %u: %s, the slot has no name", slot + 1, img->reason);
     } else {
+        if(img->refused){
+            // (read from its PROFILE.ZIP: a slot whose ZIP cannot be used has its PROFILE.I, and its name)
+            out->warnings++;
+            if(img->detail[0])
+                say(log, logctx, CAPE_LOG_WARN, "slot %u: %s (%s)", slot + 1, img->reason, img->detail);
+            else
+                say(log, logctx, CAPE_LOG_WARN, "slot %u: %s", slot + 1, img->reason);
+        }
         if(memcmp(img->info.guid, img->id.guid, sizeof(img->info.guid)) != 0 || img->info.cookie != img->id.cookie){
             out->warnings++;
             say(log, logctx, CAPE_LOG_WARN, "slot %u: the GUID or the cookie of PROFILE.I differ from the slot table, the table wins", slot + 1);
@@ -127,6 +135,13 @@ static void take_slot(const cape_slot_image* img, unsigned slot, cape_hwload* ou
         say(log, logctx, CAPE_LOG_INFO, "slot %u: bindings and lighting not read (read when the slot is asked for)", slot + 1);
         return;
     }
+    if(img->from_zip && img->refused)
+        return;   // (its ZIP said why: there are no bindings and no lighting to speak of)
+    if(img->zip == CAPE_ZIP_STALE){
+        out->warnings++;
+        say(log, logctx, CAPE_LOG_WARN, "slot %u: its files are not those of its PROFILE.ZIP (%llu bytes, the ZIP makes %llu): read from "
+            "the ZIP, a save writes them again", slot + 1, (unsigned long long)img->bytes, (unsigned long long)img->made_bytes);
+    }
     log_bindings(&img->bind, slot, out, log, logctx);
     log_light(&hs->light, slot, out, log, logctx);
 }
@@ -140,12 +155,24 @@ void cape_hwload_images_free(cape_slot_image images[CAPE_SLOTS]){
     }
 }
 
-int cape_hwload_read_one(cape_session* s, unsigned slot, int whole, cape_hwload* out, cape_slot_image* img, cape_logfn log, void* logctx){
+// The reading of a slot of a mode of cape_hwload_read_one()
+static int read_how(cape_session* s, unsigned slot, int how, cape_slot_image* img){
+    switch(how){
+    case CAPE_HWLOAD_ZIP:
+        return cape_slot_read_zip(s, slot, img);
+    case CAPE_HWLOAD_FILES:
+        return cape_slot_read(s, slot, img);
+    default:
+        return cape_slot_read_head(s, slot, img);
+    }
+}
+
+int cape_hwload_read_one(cape_session* s, unsigned slot, int how, cape_hwload* out, cape_slot_image* img, cape_logfn log, void* logctx){
     if(img)
         memset(img, 0, sizeof(*img));
     if(!s || !out || !img)
         return CAPE_E_ARG;
-    if(slot >= CAPE_SLOTS)
+    if(slot >= CAPE_SLOTS || how < CAPE_HWLOAD_HEAD || how > CAPE_HWLOAD_FILES)
         return CAPE_E_RANGE;
     if(s->state == CAPE_S_REFUSED)
         return CAPE_E_FW;
@@ -158,9 +185,9 @@ int cape_hwload_read_one(cape_session* s, unsigned slot, int whole, cape_hwload*
     cape_light_slot_init(&hs->light);
     if(cape_slotid_is_empty(id)){
         say(log, logctx, CAPE_LOG_INFO, "slot %u: empty", slot + 1);
-        return whole ? cape_slot_read(s, slot, img) : cape_slot_read_head(s, slot, img);   // (no packet: an empty, whole image)
+        return read_how(s, slot, how, img);   // (no packet: an empty, whole image)
     }
-    const int rc = whole ? cape_slot_read(s, slot, img) : cape_slot_read_head(s, slot, img);
+    const int rc = read_how(s, slot, how, img);
     if(rc != CAPE_OK){
         say(log, logctx, CAPE_LOG_ERR, "slot %u: reading failed: %s (status 0x%02x)", slot + 1, cape_errstr(rc), (unsigned)s->last_status);
         return rc;
@@ -186,7 +213,7 @@ int cape_hwload_read_all(cape_session* s, cape_hwload* out, cape_slot_image imag
     for(unsigned slot = 0; slot < CAPE_SLOTS; slot++){
         cape_slot_image img;
         const int w = (whole_mask >> slot) & 1;
-        const int rc = cape_hwload_read_one(s, slot, w, out, &img, log, logctx);
+        const int rc = cape_hwload_read_one(s, slot, w ? CAPE_HWLOAD_FILES : CAPE_HWLOAD_HEAD, out, &img, log, logctx);
         if(rc != CAPE_OK){
             cape_slot_image_free(&img);
             cape_hwload_images_free(images);

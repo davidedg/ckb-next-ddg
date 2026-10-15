@@ -104,4 +104,11 @@ int cape_write_slot(cape_wsession* w, unsigned slot, const cape_slotid* id, cons
 // session is its own code. The session's own copy of the slot table is brought up to date.
 int cape_write_verify(cape_wsession* w, unsigned slot, const cape_slotid* id, const cape_slot_files* files, cape_write_report* rep);
 
+// Erases slot `slot` as iCUE deletes a profile (corsair-protocol devices/k95p.md#delete-a-slot): 07 17 0c SS (always: the session
+// does not know which slot is selected), 07 15 SS 00 and 20 zeros, its status (which can take about a second), 07 17 0e. The slot
+// is empty afterwards, its files gone. The same checks as cape_write_slot() before anything is sent (the mask, the session); rep
+// says where it stopped (stage CLEAR, slot INCOMPLETE once the clear may have been sent, WRITTEN at the end: the slot is empty).
+// Nothing is retried; a failure ends the session. Returns CAPE_OK or the error that stopped it.
+int cape_erase_slot(cape_wsession* w, unsigned slot, cape_write_report* rep);
+
 #endif  // CAPE_WRITE_H

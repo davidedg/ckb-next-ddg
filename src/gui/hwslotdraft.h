@@ -4,27 +4,27 @@
 #include <string>
 #include "hwbinding.h"
 
-// The draft of an on-board slot of a K95 RGB Platinum in the GUI (hwslot1): what the user is making the slot become, on top of
-// the base, the record the daemon last read from the keyboard. The name and the colours of the draft are those of the mode of
-// the hardware profile (KbMode); this holds its bindings and what ties the draft to its base. A new record of the slot fills
+// The draft of an on-board slot of a K95 RGB Platinum in the GUI (hwslot): what the user is making the slot become, on top of
+// the base, the record the daemon last read from the keyboard. The mode name belongs to KbMode; this holds the complete lighting, bindings, performance
+// and what ties the draft to its base. A new record of the slot fills
 // the base; it replaces the draft only when the draft has no changes of its own, or when it is the read-back of our own save.
 // Plain C++11, no Qt.
 namespace HwSlotDraft {
 
 struct Draft {
     std::string base;                   // the id of the record the draft was made on ("" before the first one)
-    bool modified = false;              // the user changed the name, the colours, the bindings or the performance settings since the base
+    bool modified = false;              // the user changed the name, the layers, the bindings or the performance settings since the base
     bool conflict = false;              // modified, and a record with another id came: the user decides (reload or keep)
-    bool hasBindings = false;           // keys hold the bindings of the draft (a slot whose record is OK)
+    bool hasBindings = false;           // keys hold the bindings of the draft (a slot whose record is OK or EMPTY)
     HwBinding::Keys keys;
     // The performance settings: known to the draft as the keys are (a record's, copied by replace(), or the user's); a value that
-    // is not known (a record without it, a draft of the settings of an older GUI) is the base's
+    // is not known (a record without it, an imported draft) is the base's
     bool hasWinlock = false;
     uint8_t winlock = HwBinding::DEFAULT_WINLOCK;
     bool hasIndicators = false;
     std::array<uint8_t, 12> indicators = HwBinding::DEFAULT_INDICATORS;
-    bool recreate = false;              // "Recreate the bindings from scratch" on a RAW or BROKEN slot
-    bool replaceLights = false;         // "Replace with static colours" on a slot with effects
+    HwLighting::Model lighting;        // independent complete lighting, including muted layers
+    HwLighting::Model baseLighting;    // persisted base; no daemon generation survives a restart
 };
 
 // The performance settings of a slot: the Win Lock options (byte 1 of PROFILE.DAT) and the indicator colours (profile, brightness,

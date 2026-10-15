@@ -267,7 +267,7 @@ cape_layer_kind cape_light_layer_kind(const uint8_t* d, size_t len, char* why, s
         char where[64] = "";
         size_t used = 0;
         unsigned differing = 0;
-        for(size_t i = 0; i < len; i++){
+        for(size_t i = 0; i < sizeof(want); i++){
             if(d[i] == want[i])
                 continue;
             if(differing < 6 && used < sizeof(where))

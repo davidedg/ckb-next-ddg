@@ -20,9 +20,9 @@
   temperature or fan speed, via Linux `hwmon` or the [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub)
   API) onto a color gradient, with source filtering and a live value display
 - On-board (hardware) profiles of the K95 RGB Platinum, experimental and off by default: its three slots
-  as the hardware profile of the GUI, read and written as iCUE writes them, with key remaps, macros,
-  texts, key combinations, static lighting and the performance settings (Win Lock options, indicator
-  colours). See below before enabling it.
+  as the hardware profile of the GUI, with key remaps, macros, text, key combinations, editable lighting
+  layers and performance settings (Win Lock options and indicator colours). Saves include a coherent
+  `PROFILE.ZIP` model that iCUE can import. See below before enabling it.
 
 #### K95 RGB Platinum on-board profiles (experimental)
 
@@ -47,8 +47,15 @@ then `sudo systemctl restart ckb-next-daemon.service`.
 
 - The firmware loads the remaps and macros of a slot when the slot becomes active: after writing the active
   slot, switch away from it and back with the profile button.
-- The slots written here have no `PROFILE.ZIP`, iCUE's own copy of the profile, and iCUE shows them as
-  empty. ckb-next and iCUE are not meant to manage the on-board profiles of the same keyboard.
+- Lighting supports Static, Solid, Gradient, Ripple and Wave, up to five custom layers, or one of the
+  eight firmware presets alone. Disabled layers remain editable and count towards those limits.
+- Saves keep `PROFILE.ZIP` and the executable files consistent. Importing updated slots in iCUE and
+  reading back profiles edited there have been verified on iCUE 5.51.40.0, firmware 3.29 and
+  bootloader 3.03, on the UK/ISO layout, for the exercised scenes. Other combinations are experimental.
+- A missing, corrupt, unsupported or uncompilable `PROFILE.ZIP` makes a slot read-only. Erase can
+  clear it for reuse; ckb-next does not reconstruct an unknown editable model from firmware files.
+- Check prepares the exact save, Save selected and Save ALL write it, and Retry is explicit after an
+  error. Reload Slot replaces the entire local draft only after a successful read and confirmation.
 - The protocol and the file formats: [devices/k95p.md](https://github.com/davidedg/corsair-protocol/blob/master/devices/k95p.md)
   in a fork of corsair-protocol.
 

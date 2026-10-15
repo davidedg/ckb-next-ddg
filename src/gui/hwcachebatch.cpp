@@ -142,7 +142,7 @@ std::string HwCacheBatch::takeRequest(unsigned notify){
     if(state_ == Details) return detailRequest(notify);
     if(state_ != Bindings) return std::string();
     std::ostringstream out;
-    out << '@' << notify << " get :hwbind:" << bindSlot_ + 1 << ':' << bindPage_ << " get :modecount\n";
+    out << '@' << notify << " get :hwslot:" << bindSlot_ + 1 << ':' << bindPage_ << " get :modecount\n";
     return out.str();
 }
 
@@ -156,6 +156,7 @@ void HwCacheBatch::nextSlot(unsigned from){
             pageSeen_ = false;
             noCache_ = false;
             bindWords_.clear();
+            recordBytes_ = 0;
             requestReady_ = true;
             return;
         }
@@ -182,6 +183,13 @@ bool HwCacheBatch::acceptPage(const std::string& line){
     } else if(page.pages != bindPages_ || page.gen != bindGen_){
         fail("the slot changed between pages"); return true;
     }
+    // XML text expands by at most 3, and schema words by less than 16 per source byte.
+    // Include the independent binding/event budget; never allocate from the advertised page count.
+    const size_t wireMax = size_t(CAPE_XML_DOC_MAX) * 16 + size_t(64) * 256 * 1024 * 4;
+    for(const auto& word : page.words){
+        if(word.size() + 1 > wireMax - recordBytes_){ fail("record exceeds model bounds"); return true; }
+        recordBytes_ += word.size() + 1;
+    }
     bindWords_.insert(bindWords_.end(), page.words.begin(), page.words.end());
     return true;
 }
@@ -199,6 +207,9 @@ bool HwCacheBatch::pageMarker(){
     Mode& mode = pending_.modes[bindSlot_];
     std::string err;
     if(!HwBinding::parseRecord(bindWords_, mode.record, err)){ fail("invalid record: " + err); return true; }
+    if(mode.record.id != "0" && mode.record.id != mode.guid + ":" + mode.revision){
+        fail("record identity differs from the slot table"); return true;
+    }
     mode.hasRecord = true;
     mode.gen = bindGen_;
     nextSlot(bindSlot_ + 1);
@@ -241,7 +252,7 @@ bool HwCacheBatch::accept(const std::string& line){
     if(w.empty()) return false;
     if(state_ == Failed){
         if(w[0] == "modecount") failureDrained_ = true;
-        // (a "mode <m> hwbind" page too: every "mode" line is taken)
+        // (a "mode <m> hwslot" page too: every "mode" line is taken)
         // A bad response must not leak the rest of its batch into the legacy
         // incremental parser while we await the ordered terminal marker.
         return w[0] == "modecount" || w[0] == "hwprofileid" ||
@@ -288,7 +299,7 @@ bool HwCacheBatch::accept(const std::string& line){
         return true;
     }
     if(state_ == Bindings){
-        if(w.size() >= 3 && w[0] == "mode" && w[2] == "hwbind") return acceptPage(line);
+        if(w.size() >= 3 && w[0] == "mode" && w[2] == "hwslot") return acceptPage(line);
         // A late identity or detail answer here is out of order
         if(w[0] == "hwprofileid" || w[0] == "hwprofilename" || w[0] == "mode"){ fail("unexpected line"); return true; }
         return false;

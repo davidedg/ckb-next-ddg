@@ -101,14 +101,14 @@ bool recognize(const std::vector<Event>& ev, std::vector<Stroke>& strokes, unsig
     return true;
 }
 
-bool icueUsStroke(char32_t c, Stroke& out){
+bool canonicalUsStroke(char32_t c, Stroke& out){
     static const char* const lower = "abcdefghijklmnopqrstuvwxyz";
     out = Stroke();
     if(c >= 'a' && c <= 'z'){ out.key = key(std::string(1, lower[c - 'a']).c_str()); return true; }
     if(c >= 'A' && c <= 'Z'){ out.key = key(std::string(1, lower[c - 'A']).c_str()); out.shift = true; return true; }
     if(c >= '0' && c <= '9'){ out.key = key(std::string(1, static_cast<char>(c)).c_str()); return true; }
     struct { char32_t c; const char* key; bool shift; } table[] = {
-        { ' ', "space", false }, { '\t', "tab", false }, { '\n', "enter", false }, { '\r', "enter", false },
+        { ' ', "space", false }, { '\t', "tab", false }, { '\n', "enter", false },   // (a carriage return alone: none, as iCUE)
         { '!', "1", true }, { '@', "2", true }, { '#', "3", true }, { '$', "4", true }, { '%', "5", true }, { '^', "6", true },
         { '&', "7", true }, { '*', "8", true }, { '(', "9", true }, { ')', "0", true },
         { '-', "minus", false }, { '_', "minus", true }, { '=', "equal", false }, { '+', "equal", true },
@@ -127,13 +127,13 @@ bool icueUsStroke(char32_t c, Stroke& out){
     return false;
 }
 
-std::vector<Stroke> icueUsStrokes(const std::u32string& text, std::u32string* dropped){
+std::vector<Stroke> canonicalUsStrokes(const std::u32string& text, std::u32string* dropped){
     std::vector<Stroke> out;
     if(dropped) dropped->clear();
     for(size_t i = 0; i < text.size(); ++i){
         if(text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;   // "\r\n" is one Enter
         Stroke s;
-        if(icueUsStroke(text[i], s)) out.push_back(s);
+        if(canonicalUsStroke(text[i], s)) out.push_back(s);
         else if(dropped) dropped->push_back(text[i]);
     }
     return out;

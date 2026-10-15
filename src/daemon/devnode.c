@@ -360,7 +360,7 @@ static int _mkdevpath(usbdevice* kb){
                 fputs(" fwupdate", ffile);
             if(HAS_FEATURES(kb, FEAT_HWLOAD))
                 fputs(" hwload", ffile);
-            // K95 RGB Platinum with --enable-experimental and a tested firmware: the hardware slots through hwslot and get :hwbind (cape_hwslot.h)
+            // K95 RGB Platinum with --enable-experimental and a tested firmware: the hardware slots through hwslot and get :hwslot (cape_hwslot.h)
             if(USES_CAPE_FS(kb) && kb->cape_ok)
                 fputs(" " CAPE_HWSLOT_TOKEN, ffile);
             if(HAS_FEATURES(kb, FEAT_DONGLE))

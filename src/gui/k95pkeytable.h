@@ -21,13 +21,13 @@ int evdev(unsigned index);
 // "bslash_iso", is only on ISO), -1 if none
 int indexOfEvdev(int code, bool iso);
 
-// The keys iCUE's GUI offers for a hardware profile (as the daemon's cape_binding_icue_sets): its
+// The keys iCUE's GUI offers for a hardware profile (as the daemon's cape_binding_keysets): its
 // Keyboard picker (the US ANSI keys of the K95P without G1-G6, the profile, brightness and lock buttons), its media keys, the 9
 // Language keys it writes on a real key; a destination of a remap is one of these or a mouse button
-bool icueKeyboard(unsigned index);
-bool icueMedia(unsigned index);
-bool icueLanguage(unsigned index);
-bool isIcueDestination(unsigned index);
+bool keyboardKey(unsigned index);
+bool mediaKey(unsigned index);
+bool languageKey(unsigned index);
+bool isSupportedDestination(unsigned index);
 
 } // namespace K95PKeyTable
 

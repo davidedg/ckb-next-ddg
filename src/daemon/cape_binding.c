@@ -68,7 +68,7 @@ static unsigned flags_of(uint8_t subtype, uint8_t start, uint8_t run, uint8_t re
         f |= CAPE_BIND_F_LOCKED;
     // iCUE writes a Shortcut and a Text only on press and uninterrupted (our own tools wrote the others)
     if(subtype != CAPE_MACRO_MACRO && (start != 0x00 || run != 1))
-        f |= CAPE_BIND_F_NON_ICUE;
+        f |= CAPE_BIND_F_NONCANONICAL;
     return f;
 }
 
@@ -427,7 +427,7 @@ static const uint8_t shortcut_right[] = { 0x44, 0x5b, 0x43, 0x5a };      // rwin
 // The keys iCUE's GUI offers: its Keyboard picker, the US
 // ANSI keys without the G keys, the profile, brightness and lock buttons; the media keys of its Media action; the 9 Language keys it
 // writes on a real key (the other 12 it writes as 00, Esc)
-static const uint8_t icue_keyboard[] = {
+static const uint8_t keyboard_keys[] = {
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,   // esc f1..f11
     0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,   // grave 1..9 0 minus
     0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23,   // tab q w e r t y u i o p lbrace
@@ -439,8 +439,8 @@ static const uint8_t icue_keyboard[] = {
     0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x70, 0x71, 0x72,   // numlock numslash numstar numminus numplus numenter num7..9 num4..6
     0x73, 0x74, 0x75, 0x76, 0x77,                                             // num1..3 num0 numdot
 };
-static const uint8_t icue_media[] = { 0x61, 0x62, 0x63, 0x64, 0x65, 0x82, 0x83 };   // mute stop prev play next volup voldn
-static const uint8_t icue_language[] = { 0x31, 0x3f, 0x41, 0x42, 0x51, 0x53, 0x55, 0x90, 0x91 };   // bslash_iso hanja hangul katahira hash ro yen muhenkan henkan
+static const uint8_t media_keys[] = { 0x61, 0x62, 0x63, 0x64, 0x65, 0x82, 0x83 };   // mute stop prev play next volup voldn
+static const uint8_t language_keys[] = { 0x31, 0x3f, 0x41, 0x42, 0x51, 0x53, 0x55, 0x90, 0x91 };   // bslash_iso hanja hangul katahira hash ro yen muhenkan henkan
 
 static int in_set(const uint8_t* set, size_t n, uint8_t k){
     for(size_t i = 0; i < n; i++)
@@ -449,14 +449,14 @@ static int in_set(const uint8_t* set, size_t n, uint8_t k){
     return 0;
 }
 
-unsigned cape_binding_icue_sets(uint8_t key){
+unsigned cape_binding_keysets(uint8_t key){
     unsigned sets = 0;
-    if(in_set(icue_keyboard, sizeof(icue_keyboard), key))
-        sets |= CAPE_BIND_ICUE_KEYBOARD;
-    if(in_set(icue_media, sizeof(icue_media), key))
-        sets |= CAPE_BIND_ICUE_MEDIA;
-    if(in_set(icue_language, sizeof(icue_language), key))
-        sets |= CAPE_BIND_ICUE_LANGUAGE;
+    if(in_set(keyboard_keys, sizeof(keyboard_keys), key))
+        sets |= CAPE_BIND_KEYSET_KEYBOARD;
+    if(in_set(media_keys, sizeof(media_keys), key))
+        sets |= CAPE_BIND_KEYSET_MEDIA;
+    if(in_set(language_keys, sizeof(language_keys), key))
+        sets |= CAPE_BIND_KEYSET_LANGUAGE;
     return sets;
 }
 
@@ -550,7 +550,7 @@ unsigned cape_binding_macro_rows(const cape_event* ev, unsigned n){
 }
 
 // A delay in the form iCUE writes: 2 bytes below 8192 ms, 4 from there
-static int icue_delay(cape_event e){
+static int canonical_delay(cape_event e){
     const int kind = cape_ev_kind(e);
     return kind == CAPE_EV_DELAY || (kind == CAPE_EV_LONG && cape_ev_delay_ms(e) > CAPE_DELAY_SHORT_MAX);
 }
@@ -587,7 +587,7 @@ static const char* text_outside(const cape_binding_action* a, char* buf, size_t 
         const cape_event e = a->events[i];
         if(is_key_event(e))
             continue;
-        if(!icue_delay(e)){
+        if(!canonical_delay(e)){
             say(buf, cap, "event %u: a delay of a text is constant, in the form iCUE writes", i);
             return buf;
         }
@@ -607,7 +607,7 @@ static const char* imitate_outside(const cape_binding_action* a, char* buf, size
     if(a->nevents != 3 || cape_ev_kind(a->events[0]) != CAPE_EV_PRESS || cape_ev_kind(a->events[2]) != CAPE_EV_RELEASE)
         return "not the shape of 'Imitate holding key' (a key pressed, a delay, the key released)";
     const uint8_t k = cape_ev_key(a->events[0]);
-    if(!(cape_binding_icue_sets(k) & CAPE_BIND_ICUE_KEYBOARD)){
+    if(!(cape_binding_keysets(k) & CAPE_BIND_KEYSET_KEYBOARD)){
         say(buf, cap, "'Imitate holding key' holds a key of iCUE's keyboard, not %02x", k);
         return buf;
     }
@@ -623,7 +623,7 @@ static const char* imitate_outside(const cape_binding_action* a, char* buf, size
     // From CAPE_BIND_IMITATE_MIN_MS to CAPE_BIND_IMITATE_MAX_MS in steps of 100 ms: a delay of 0 makes this a Keystroke, and
     // 16 777 200 is the largest multiple of 100 that fits in 24 bits, so the step says the whole range
     const unsigned ms = cape_ev_delay_ms(d);
-    if(!icue_delay(d) || ms % 100){
+    if(!canonical_delay(d) || ms % 100){
         say(buf, cap, "'Imitate holding key' holds a key 0.1 to 16777.2 s, in steps of 0.1 s, in the form iCUE writes");
         return buf;
     }
@@ -658,7 +658,7 @@ static int check_macro(const cape_binding_action* a, unsigned key, char* why, si
         if(!bad && !imitate)
             for(unsigned i = 0; i < a->nevents; i += 2){
                 const uint8_t k = cape_ev_key(a->events[i]);
-                if(modifier_rank(k) < 0 && !(cape_binding_icue_sets(k) & CAPE_BIND_ICUE_KEYBOARD)){
+                if(modifier_rank(k) < 0 && !(cape_binding_keysets(k) & CAPE_BIND_KEYSET_KEYBOARD)){
                     say(buf, sizeof(buf), "a shortcut has a key of iCUE's keyboard, not %02x", k);
                     bad = buf;
                     break;
@@ -689,7 +689,7 @@ int cape_binding_check(const cape_binding_model* edit, const cape_binding_model*
             say(why, whycap, "key %02x: remap to %02x, which is neither a key nor a mouse button", k, a->dst);
             return CAPE_E_RANGE;
         }
-        if(a->kind == CAPE_BIND_REMAP && !is_mouse(a->dst) && !cape_binding_icue_sets(a->dst)){
+        if(a->kind == CAPE_BIND_REMAP && !is_mouse(a->dst) && !cape_binding_keysets(a->dst)){
             say(why, whycap, "key %02x: remap to %02x, which iCUE does not offer", k, a->dst);
             return CAPE_E_RANGE;
         }
@@ -744,7 +744,9 @@ int cape_binding_build(const cape_binding_model* m, cape_slot_files* out){
     if(!buf)
         return CAPE_E_CAP;
     unsigned j = 0;
-    for(unsigned k = 0; k < CAPE_BIND_K95_KEYS && rc == CAPE_OK; k++){
+    // the keys in iCUE's order: ascending, the profile key last
+    for(unsigned n = 0; n < CAPE_BIND_K95_KEYS && rc == CAPE_OK; n++){
+        const unsigned k = n == CAPE_BIND_K95_KEYS - 1 ? CAPE_BIND_KEY_PROFSWITCH : n + (n >= CAPE_BIND_KEY_PROFSWITCH);
         const cape_binding_action* a = &m->key[k];
         if(a->kind != CAPE_BIND_MACRO)
             continue;

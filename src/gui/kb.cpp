@@ -188,7 +188,7 @@ Kb::Kb(QObject *parent, const QString& path) :
         _maxDpi = 12000;
 
     prefsPath = "Devices/" + usbSerial;
-    _k95HwSlots = _model == KeyMap::K95P && features.contains("hwslot1") && k95FirmwareTested();
+    _k95HwSlots = _model == KeyMap::K95P && features.contains("hwslot") && k95FirmwareTested();
 
     hwModeCount = (_model == KeyMap::K95 || k95Onboard()) ? 3 : 1;
     // Assumed until the daemon answers `get :modecount` on connect (see run());
@@ -256,7 +256,7 @@ Kb::Kb(QObject *parent, const QString& path) :
     cmd.write(QString("scrollspeed %1\n").arg(_scrollSpeed).toLatin1());
 #endif
     if(_k95HwSlots){
-        // hwslot1: hardware or software mode is decided when the first cache load ends (decideK95Mode())
+        // hwslot: hardware or software mode is decided when the first cache load ends (decideK95Mode())
         cmd.write("\n");
         k95Decided = false;
         k95DecisionTimer = new QTimer(this);
@@ -535,8 +535,8 @@ void Kb::writeDeviceSettings(CkbSettingsBase& settings, bool updateModel){
         settings.setValue("K95PHwMigrated", true);
     if(!hwGuid.isEmpty())
         settings.setValue("K95PHwProfile", hwGuid);
-    // The drafts of the slots (hwslot1), kept apart from the profiles so that an export never carries them; rewritten
-    // also by a GUI whose daemon does not offer hwslot1, which leaves them as they were
+    // The drafts of the slots (hwslot), kept apart from the profiles so that an export never carries them; rewritten
+    // also by a GUI whose daemon does not offer hwslot, which leaves them as they were
     if(_model == KeyMap::K95P){
         for(int i = 0; i < 3; ++i){
             HwSlotDraft::Draft d = k95Drafts[size_t(i)];
@@ -557,7 +557,7 @@ bool Kb::canDeleteMode(const KbProfile* profile) const {
 }
 
 void Kb::migrateK95HwProfile(KbProfile* profile){
-    // Once per device, on the first cache of a daemon with hwslot1. By position: hwsave saved the mode in position i to the
+    // Once per device, on the first cache of a daemon with hwslot. By position: hwsave saved the mode in position i to the
     // slot i, and its GUIDs were rewritten by position on every load. The first three modes become the slots (their name, id
     // and colours are kept until the cache replaces them; animations, bindings, events and performance are software things
     // and go), every mode after them is dropped. The backup of the settings, taken first (once), still has them.
@@ -880,6 +880,7 @@ void Kb::retryK95Migration(){
 
 void Kb::applyK95CacheBatch(){
     if(!k95CacheBatch || k95CacheBatch->state() != HwCacheBatch::Complete) return;
+    rememberK95DraftChanges();
     // No profile identity, name, mode or binding may change before this succeeds.
     if(_k95HwSlots && !k95Migrated){
         CkbSettings::HwBackupStatus status;
@@ -888,7 +889,7 @@ void Kb::applyK95CacheBatch(){
         CkbSettings::k95pHwBackupOnce(&status, prefsPath, snapshot.allValues());
         if(status == CkbSettings::BackupFailed){
             k95MigrationBlocked = true;
-            k95CacheReady = false;
+            invalidateK95Cache();
             emit k95CacheFinished(false);
             decideK95Mode(); // Unconverted profiles remain usable in software mode.
             QTimer::singleShot(0, this, [this](){ emit k95MigrationFailed(); });
@@ -933,11 +934,28 @@ void Kb::applyK95CacheBatch(){
             fillK95Mode(target, mode, i);
             continue;
         }
-        // hwslot1: the record is the base; it replaces the draft (the mode's name and colours, and the bindings) only when
+        // hwslot: the record is the base; it replaces the draft (the mode's name and colours, and the bindings) only when
         // the draft has nothing of its own, or when it is the read-back of our own save and holds what was saved
         HwSlotDraft::Draft& draft = k95Drafts[i];
-        if(k95CacheReady)
-            draft.modified = k95DraftModified(int(i));  // against the base it was made on, before that is replaced
+        if(k95EraseMask & (1u << i)){
+            // The read-back of our own erase: an empty slot, which replaces the draft (the edits of the slot go with it); anything
+            // else is not what the daemon said it did
+            if(!mode.hasRecord || mode.record.id != "0" || profile != _hwProfile){
+                unsynced |= 1u << i;
+                draft.modified = true;
+                continue;
+            }
+            k95Read[i] = K95_READ;
+            HwSlotDraft::replace(draft, mode.record, true);
+            fillK95Mode(target, mode, i);
+            continue;
+        }
+        if((k95ReloadMask & (1u << i)) && mode.hasRecord){
+            HwSlotDraft::replace(draft, mode.record, true);
+            fillK95Mode(target, mode, i);
+            _needsSave = true;
+            continue;
+        }
         const bool committing = k95CommitMask & (1u << i);
         // The read-back of our own save holds what the slot was to become, or the GUI and the keyboard disagree: then the draft
         // stays, modified on the base it was made on, and the next load asks to reload or keep it (nothing is lost in silence)
@@ -971,6 +989,7 @@ void Kb::applyK95CacheBatch(){
         }
     }
     k95CommitMask &= ~k95CacheBatch->mask();
+    k95EraseMask &= ~k95CacheBatch->mask();
     if(!profile->currentMode() && profile->modeCount() > 0)
         profile->currentMode(profile->at(0));
     hwProfile(profile);
@@ -1022,32 +1041,8 @@ static const std::set<int>& k95WritableLeds(){
     return writable;
 }
 
-// The colours of the writable LEDs that a :hwrgb answer gives, by LED: black for one that no name of the answer gives, else the
-// colour of the names it gives for it (the daemon prints every name of a LED with its colour)
-static std::map<int, QRgb> k95BaseLeds(const std::string& rgb){
-    std::map<int, QRgb> out;
-    const std::set<int>& writable = k95WritableLeds();
-    for(int led : writable) out[led] = 0;
-    for(const QString& group : QString::fromStdString(rgb).split(' ')){
-        if(group.isEmpty()) continue;
-        const int colon = group.indexOf(':');
-        bool ok = false;
-        const uint colour = (colon < 0 ? group : group.mid(colon + 1)).toUInt(&ok, 16) & 0xffffff;
-        if(!ok) continue;
-        if(colon < 0){
-            for(auto& led : out) led.second = colour;
-            continue;
-        }
-        for(const QString& key : group.left(colon).split(','))
-            for(size_t n = 0; n < K95PLedMap::count; ++n)
-                if(key == QLatin1String(K95PLedMap::entries[n].name) && out.count(K95PLedMap::entries[n].led))
-                    out[K95PLedMap::entries[n].led] = colour;
-    }
-    return out;
-}
-
 static QString k95NameOf(const HwCacheBatch::Mode& mode, unsigned i){
-    // The whole name of the record (hwslot1); iCUE's name of a new profile for an empty slot; else the one of :hwname
+    // The whole name of the record (hwslot); iCUE's name of a new profile for an empty slot; else the one of :hwname
     if(mode.hasRecord && mode.record.hasName)
         return QString::fromStdString(mode.record.name);
     if(mode.hasRecord && mode.record.id == "0")
@@ -1064,27 +1059,6 @@ QString Kb::k95BaseName(int i) const {
     if(i < 0 || i > 2)
         return QString();
     return k95NameOf(k95CacheKnown.modes[size_t(i)], unsigned(i));
-}
-
-void Kb::k95Recreate(int i, bool on){
-    HwSlotDraft::Draft* d = k95Draft(i);
-    const HwBinding::Record* r = k95SlotRecord(i);
-    if(!d || !r || r->readonly || (r->state != HwBinding::Record::RAW && r->state != HwBinding::Record::BROKEN) || d->recreate == on)
-        return;
-    d->recreate = on;
-    d->hasBindings = on;
-    d->keys = HwBinding::Keys();   // (the performance settings are not bindings: they stay as they are)
-    k95DraftChanged(i);
-}
-
-void Kb::k95ReplaceLights(int i, bool on){
-    HwSlotDraft::Draft* d = k95Draft(i);
-    const HwBinding::Record* r = k95SlotRecord(i);
-    if(!d || !r || r->readonly || (r->light != HwBinding::Record::EFFECTS && r->light != HwBinding::Record::UNKNOWN) ||
-       d->replaceLights == on)
-        return;
-    d->replaceLights = on;
-    k95DraftChanged(i);
 }
 
 HwSlotDraft::Perf Kb::k95Perf(int i) const {
@@ -1122,10 +1096,8 @@ void Kb::k95ApplyPerf(int i, const HwSlotDraft::Perf& from){
                      .arg(i + 1).arg(QString::fromStdString(m.record.readonlyWhy)));
         return;
     }
-    HwSlotDraft::Draft& d = k95Drafts[size_t(i)];
-    const HwSlotDraft::Perf to = HwSlotDraft::effectivePerf(d, &m.record);
     HwSlotDraft::Perf p = from;
-    p.winlock = uint8_t((from.winlock & 0x0f) | (to.winlock & 0xf0));   // the bits iCUE never writes stay the target's
+    p.winlock &= 0x0f;   // (the bits iCUE never writes: a save writes none of them)
     k95SetPerf(i, p);
 }
 
@@ -1178,8 +1150,7 @@ void Kb::fillK95Mode(KbMode* target, const HwCacheBatch::Mode& mode, unsigned i)
         }
     } else if((_hwFlowBusy && (k95CacheBlackMask & (1u << i))) ||
               (mode.hasRecord && mode.record.light == HwBinding::Record::NONE)){
-        // A saved all-black picture has zero layers and therefore no RGB
-        // response (the record of hwslot1 says it: lt:empty). Only canonical
+        // An empty lighting list has no RGB response. Only canonical
         // writable cells may be inferred black.
         for(size_t n = 0; n < K95PLedMap::count; ++n)
             if(writable.count(K95PLedMap::entries[n].led))
@@ -1199,6 +1170,19 @@ HwSlotDraft::Draft* Kb::k95Draft(int i){
     return &k95Drafts[size_t(i)];
 }
 
+void Kb::rememberK95DraftChanges(){
+    if(!_k95HwSlots || !k95CacheReady)
+        return;
+    // Compare all drafts while their last confirmed base is still available, including slots outside a refresh's mask.
+    for(int i = 0; i < 3; ++i)
+        k95Drafts[size_t(i)].modified = k95DraftModified(i);
+}
+
+void Kb::invalidateK95Cache(){
+    rememberK95DraftChanges();
+    k95CacheReady = false;
+}
+
 bool Kb::k95DraftModified(int i){
     if(!_k95HwSlots || i < 0 || i > 2)
         return false;
@@ -1206,7 +1190,7 @@ bool Kb::k95DraftModified(int i){
     const HwBinding::Record* base = k95SlotRecord(i);
     if(!base || !_hwProfile || _hwProfile->modeCount() <= i || d.base != base->id)
         return d.modified;  // not comparable now: what was last known
-    return d.recreate || d.replaceLights || k95ContentDiffers(i, k95CacheKnown.modes[size_t(i)]);
+    return k95ContentDiffers(i, k95CacheKnown.modes[size_t(i)]);
 }
 
 bool Kb::k95NameDiffers(int i, const HwCacheBatch::Mode& cached) const {
@@ -1221,36 +1205,22 @@ bool Kb::k95ContentDiffers(int i, const HwCacheBatch::Mode& cached, const HwBind
     const HwSlotDraft::Draft& d = k95Drafts[size_t(i)];
     if(k95NameDiffers(i, cached))
         return true;
-    if(d.hasBindings && (base.state == HwBinding::Record::RAW || base.state == HwBinding::Record::BROKEN ||
-                         !HwBinding::sameBindings(d.keys, base.keys)))
+    if(d.hasBindings && (base.state == HwBinding::Record::READONLY || !HwBinding::sameBindings(d.keys, base.keys)))
         return true;
     // The performance settings, whatever the bindings are; what the draft does not know is the one of the base it was made on
     if(HwSlotDraft::effectivePerf(d, fallback ? fallback : &base) != HwSlotDraft::basePerf(&base))
         return true;
-    return k95ColoursDiffer(i, cached);
+    return k95LightingDiffers(i, cached);
 }
 
-bool Kb::k95ColoursDiffer(int i, const HwCacheBatch::Mode& cached) const {
-    // The colours count only where they are an image the GUI can show (static layers, or none)
-    if(cached.record.light != HwBinding::Record::STATIC && cached.record.light != HwBinding::Record::NONE)
-        return false;
-    // By LED, not by name: the daemon's :hwrgb gives every name of a LED (the LED of 1 is also zone14, the one of esc zone1), the
-    // keymap of the mode has one of them, and a save takes the colour of that one (makeK95PSnapshot)
-    const std::map<int, QRgb> want = k95BaseLeds(cached.hasRgb ? cached.rgb : std::string());
-    K95PSnapshot have;
-    std::string error;
-    if(!makeK95PSnapshot(_hwProfile->keyMap(), _hwProfile->at(i)->light()->colorMap(), QString("x"), unsigned(i + 1), have, error))
-        return true;
-    for(const auto& led : want)
-        if(size_t(led.first) >= have.ledRgb.size() || (have.ledRgb[size_t(led.first)] & 0xffffff) != led.second)
-            return true;
-    return false;
+bool Kb::k95LightingDiffers(int i, const HwCacheBatch::Mode& cached) const {
+    return !HwLighting::same(k95Drafts[size_t(i)].lighting, cached.record.lighting);
 }
 
 bool Kb::k95LightsChanged(int i) const {
     if(!k95SlotRecord(i) || !_hwProfile || _hwProfile->modeCount() <= i)
         return false;
-    return k95ColoursDiffer(i, k95CacheKnown.modes[size_t(i)]);
+    return k95LightingDiffers(i, k95CacheKnown.modes[size_t(i)]);
 }
 
 bool Kb::k95SaveSlots(bool all, int selected, std::vector<HwSaveFlow::Slot>& saveSlots, std::array<bool, 3>& rgbRequired,
@@ -1286,26 +1256,42 @@ bool Kb::k95SaveSlots(bool all, int selected, std::vector<HwSaveFlow::Slot>& sav
         KbMode* mode = _hwProfile->at(i);
         K95PStage stage;
         std::string error;
-        if(!makeK95PStage(_hwProfile->keyMap(), mode->light()->colorMap(), mode->name(), k95BaseName(i), k95LightsChanged(i),
+        if(!makeK95PStage(_hwProfile->keyMap(), mode->name(), k95BaseName(i),
                           *record, k95Drafts[size_t(i)], unsigned(i + 1), unsigned(notifyNumber), txn | unsigned(i + 1), stage, error)){
             why = tr("M%1 cannot be prepared: %2").arg(i + 1).arg(QString::fromStdString(error));
             return false;
         }
         HwSaveFlow::Slot slot;
         slot.mode = unsigned(i + 1);
+        slot.name = mode->name().toStdString();
         slot.prepare = stage.prepare;
         slot.check_line = stage.check;
         slot.save_line = stage.save;
         slot.abort_line = stage.abort;
-        slot.invisible_keys = stage.pic && stage.invisibleKeys;
-        slot.many_colours = stage.pic && stage.colours > 5;
-        rgbRequired[size_t(i)] = stage.rgbRequired;
         saveSlots.push_back(slot);
     }
     if(saveSlots.empty()){
         why = tr("No slot was read from the keyboard yet: select a mode to read it.");
         return false;
     }
+    return true;
+}
+
+bool Kb::k95EraseLine(int i, std::string& line, QString& why) const {
+    line.clear();
+    if(!_k95HwSlots || !k95CacheReady || i < 0 || i > 2 || notifyNumber < 1 || notifyNumber > 9){
+        why = tr("The hardware slots are not ready.");
+        return false;
+    }
+    // The id the GUI knows the slot by: its record's, else the one of :hwid (a slot whose read failed); an empty slot always has
+    // its record (from the attach)
+    const HwCacheBatch::Mode& m = k95CacheKnown.modes[size_t(i)];
+    const std::string base = m.hasRecord ? m.record.id : m.guid + ":" + m.revision;
+    if(!HwBinding::validId(base)){
+        why = tr("M%1 was not read from the keyboard.").arg(i + 1);
+        return false;
+    }
+    line = "@" + std::to_string(notifyNumber) + " hwslot erase:" + std::to_string(i + 1) + ":" + base + "\n";
     return true;
 }
 
@@ -1323,8 +1309,10 @@ void Kb::k95ResolveConflict(int i, bool reload){
     if(reload){
         HwSlotDraft::replace(k95Drafts[size_t(i)], cached.record, cached.hasRecord);
         fillK95Mode(_hwProfile->at(i), cached, unsigned(i));
-    } else
+    } else {
         HwSlotDraft::keep(k95Drafts[size_t(i)], cached.hasRecord ? cached.record.id : std::string());
+        k95Drafts[size_t(i)].baseLighting = cached.record.lighting;
+    }
     k95DraftChanged(i);
 }
 
@@ -1368,8 +1356,8 @@ void Kb::readNotify(const QString& line){
         return;
     }
     if(k95Onboard() && components[0] == "mode" && components.count() >= 3 &&
-       (components[2] == "hwsave" || components[2] == "hwsavecheck")){
-        emit hwSaveLine(line);
+       (components[2] == "hwsave" || components[2] == "hwsavecheck" || components[2] == "hwerase")){
+        emit hwSaveLine(line);   // (the erase of a slot goes through the save flow)
         return;
     }
     if(_model == KeyMap::K95P && k95CacheBatch && !k95ReplayingCache){
@@ -1403,7 +1391,7 @@ void Kb::readNotify(const QString& line){
                     k95ReadEnd(slot, false, QString::fromStdString(k95CacheBatch->error()));
                 }
             } else if(k95CacheBatch->state() == HwCacheBatch::Failed){
-                k95CacheReady = false;
+                invalidateK95Cache();
                 if(k95CacheBatch->failureDrained() && !k95CacheFailureNotified){
                     k95CacheFailureNotified = true;
                     qWarning() << "K95P hardware cache load failed:" <<
@@ -1419,7 +1407,7 @@ void Kb::readNotify(const QString& line){
         if(components[0] == "hwprofileid" || components[0] == "hwprofilename" ||
            (components[0] == "mode" && components.count() >= 3 &&
             (components[2] == "hwid" || components[2] == "hwname" || components[2] == "hwrgb" ||
-             components[2] == "hwbind")))
+             components[2] == "hwslot")))
             return;
     }
     if(components.count() < 2)
@@ -1746,7 +1734,7 @@ void Kb::setCurrentProfile(KbProfile* profile){
     emit profileAboutToChange();
     _currentProfile = profile;
     if(_k95HwSlots && k95Decided){
-        // hwslot1: the hardware profile is the keyboard's hardware mode
+        // hwslot: the hardware profile is the keyboard's hardware mode
         if(isHwSlotProfile(profile) && !k95InHw)
             enterK95Hw();
         else if(!isHwSlotProfile(profile) && k95InHw){
@@ -1826,6 +1814,17 @@ void Kb::k95WantSlot(bool retry){
     k95NextRead();
 }
 
+bool Kb::k95ReloadSlot(int i){
+    if(!_k95HwSlots || !k95CacheReady || !isHwSlotProfile(_currentProfile) || i < 0 || i > 2 ||
+       _hwFlowBusy || k95Rec || k95Reading() || !k95ReadQueue.empty() || !cmd.isOpen())
+        return false;
+    k95ReloadMask |= 1u << unsigned(i);
+    k95Read[size_t(i)] = K95_UNREAD;
+    k95QueueRead(i, true);
+    k95NextRead();
+    return true;
+}
+
 void Kb::k95QueueRead(int i, bool retry){
     // A failed read is tried again only when the user opens the mode again (never on its own: a read that fails the same way would
     // go round without end), or copies to it
@@ -1901,6 +1900,7 @@ void Kb::k95ReadLine(const QStringList& components, const QString& line){
 void Kb::k95ReadEnd(int slot, bool ok, const QString& why){
     if(slot < 0 || slot > 2)
         return;
+    k95ReloadMask &= ~(1u << unsigned(slot));
     k95Read[size_t(slot)] = ok ? K95_READ : K95_FAILED;
     k95ReadWhy[size_t(slot)] = why;
     if(k95PendingCopy[size_t(slot)]){
@@ -1932,7 +1932,9 @@ void Kb::k95DropQueuedReads(){
     const std::vector<int> queued = k95ReadQueue;
     k95ReadQueue.clear();
     for(int i : queued){
-        k95Read[size_t(i)] = K95_UNREAD;
+        const bool reload = k95ReloadMask & (1u << unsigned(i));
+        k95ReloadMask &= ~(1u << unsigned(i));
+        k95Read[size_t(i)] = reload && k95CacheKnown.modes[size_t(i)].hasRecord ? K95_READ : K95_UNREAD;
         if(k95PendingCopy[size_t(i)]){
             k95PendingCopy[size_t(i)] = false;
             k95NoteLater(tr("M%1 was not read from the keyboard (the hardware profile was left first): the performance settings were "
@@ -1951,19 +1953,19 @@ bool Kb::beginHwFlow(){
     return true;
 }
 
-bool Kb::startK95CacheRefresh(unsigned mask, unsigned rgbRequired, std::string& request){
+bool Kb::startK95CacheRefresh(unsigned mask, unsigned rgbRequired, std::string& request, bool requireChangedIds){
     request.clear();
     // (a record of a read on demand abandoned by its guard is replaced too: it stopped)
     if(!_hwFlowBusy || !k95CacheReady || !k95CacheBatch ||
        (k95CacheBatch->state() != HwCacheBatch::Complete && !k95BatchDiscard) || !mask || (mask & ~7u) ||
        (rgbRequired & ~mask)) return false;
-    // hwsave infers a black picture from a missing :hwrgb; hwslot1 has it in the record (lt:empty): a slot whose effects were
+    // hwsave infers a black picture from a missing :hwrgb; hwslot carries the complete lighting model: a slot whose effects were
     // kept has no :hwrgb either, and is not black
     k95CacheBlackMask = _k95HwSlots ? 0 : mask & ~rgbRequired;
     k95CacheFailureNotified = false;
     k95ReadBatchSlot = -1;
     k95BatchDiscard = false;
-    k95CacheBatch.reset(new HwCacheBatch(mask, rgbRequired, true, k95CacheKnown));
+    k95CacheBatch.reset(new HwCacheBatch(mask, rgbRequired, requireChangedIds, k95CacheKnown));
     if(_k95HwSlots)
         k95CacheBatch->requestBindings();
     request = k95CacheBatch->identityRequest(unsigned(notifyNumber));

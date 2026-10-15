@@ -12,8 +12,12 @@
  * cape_slot_plan_build() makes the new set from them and from the picture the user drew: the lighting files are new, PROFILE.I
  * has the new name (if it changed), the next cookie and the same GUID and indicator colours, and the others are the ones that
  * were read, and so are the lighting files where the picture is the one the slot's lighting already makes: a rename does not flatten
- * opacities and overlaps, and does not turn a slot of eight colours into a refusal. PROFILE.ZIP, iCUE's own copy of the profile, is not part of it: it is neither read nor written (the project
- * does not coexist with iCUE), so a slot written here has none.
+ * opacities and overlaps, and does not turn a slot of eight colours into a refusal.
+ *
+ * The truth of a slot is its PROFILE.ZIP, as for iCUE (cape_zipslot.h): cape_slot_read_zip() reads PROFILE.I, the size of the slot
+ * and the ZIP, and the image is the one cape_slot_read() would make of the files the ZIP makes. A slot without a ZIP, or with one
+ * that cannot be used, is refused; one whose files on the keyboard do not add up to the ZIP's is read from its ZIP all the same,
+ * and says so (zip STALE). cape_slot_read() reads the files themselves, for the tools and the tests that look at them.
  *
  * Nothing is rewritten that cannot be kept whole: a slot whose PROFILE.DAT is not understood cannot say which macro files it
  * has (the file system has no directory listing), one whose DAT names a file that does not exist would leave a dangling
@@ -25,8 +29,11 @@
 
 #include "cape.h"
 #include "cape_binding.h"
+#include "cape_profile.h"
+#include "cape_compile.h"
 #include "cape_light.h"
 #include "cape_slotfiles.h"
+#include "cape_zipslot.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -46,6 +53,8 @@ typedef struct {
     int refused;                  // it does, and it cannot be rewritten at all (PROFILE.I is missing or not valid); reason says why.
                                   // The bindings are judged on their own (bind), and so is the lighting (light.complete)
     char reason[CAPE_SLOT_WHY];
+    char detail[CAPE_SLOT_WHY];   // for the log, with reason: what its compiler said of a PROFILE.ZIP whose files cannot be made
+                                  // (reason is what the GUI shows; empty otherwise)
     cape_slotid id;               // its entry of the slot table
     cape_info info;               // PROFILE.I as parsed (valid if info_ok)
     int info_ok;
@@ -56,6 +65,13 @@ typedef struct {
     cape_slot_files light_files;  // its files as read (lghtcnt.cnt, lght_NN.d/.k/.r), whatever the lighting is
     unsigned warnings;            // things that looked wrong and were kept: a GUID that differs from the table, a macro of another size
     unsigned packets;             // packets the reading took
+    // Read from its PROFILE.ZIP (cape_slot_read_zip, cape_slot_image_from_zip_files): the files above are those the ZIP makes
+    int from_zip;
+    cape_zip_state zip;           // OK; NONE, UNKNOWN, CORRUPT, UNCOMPILABLE (the slot is refused, reason says why); STALE
+    cape_profile_profile model;      // the model of the ZIP (empty unless zip is OK or STALE)
+    uint64_t bytes;               // the total size of the files of the slot (0e 17 03 00), and what the ZIP makes (made_bytes)
+    uint64_t made_bytes;
+    int layout;                   // the physical layout of the keyboard the files were made for (CAPE_PROFILE_LAYOUT_*)
 } cape_slot_image;
 
 void cape_slot_image_free(cape_slot_image* img);
@@ -71,6 +87,17 @@ int cape_slot_read_head(cape_session* s, unsigned slot, cape_slot_image* out);
 // The same as cape_slot_read() from files in memory (a save that was written and read back), with the entry of the slot table they belong to (an empty
 // entry gives an empty slot). CAPE_OK, CAPE_E_ARG, or CAPE_E_CAP if memory ran out.
 int cape_slot_image_from_files(const cape_slot_files* files, const cape_slotid* id, cape_slot_image* out);
+
+// Reads slot 0..2 of an open session from its PROFILE.ZIP, as iCUE does: PROFILE.I, the size of the slot (0e 17 03 00) and
+// PROFILE.ZIP, 2 files. The other files are made of the model of the ZIP for the physical layout of the keyboard (s->layout), and
+// the image is what cape_slot_read() would read from them, PROFILE.I with the indicator colours of the model; the ZIP is in files
+// too. Animated lighting is EFFECTS with its complete compiled files. A slot
+// whose ZIP is missing, of an unsupported iCUE, damaged or one the files cannot be made of is refused, zip saying which; one whose size
+// is not what the ZIP makes is not (zip STALE). Returns as cape_slot_read().
+int cape_slot_read_zip(cape_session* s, unsigned slot, cape_slot_image* out);
+// The same from files in memory (a save that was written and read back: PROFILE.I and PROFILE.ZIP of files, the size of all of
+// them), with the entry of the slot table they belong to and the physical layout. CAPE_OK, CAPE_E_ARG, or CAPE_E_CAP.
+int cape_slot_image_from_zip_files(const cape_slot_files* files, const cape_slotid* id, int layout, cape_slot_image* out);
 
 // What the user wants the slot to be
 typedef struct {
@@ -91,6 +118,7 @@ typedef struct {
                                           // PROFILE.MAP, PROFILE.DAT and macro files as they are
     int recreate;                 // the bindings replace bindings of the slot that are not a model (RAW, BROKEN): required for those, and
                                   // refused for bindings that are a model (those are edited)
+    const cape_lightmodel* lighting; // explicit typed replacement; NULL keeps the non-editor import API
     int light_keep;               // keep the lighting files as they are (r, g, b are not used): refused if they were not all read
     const cape_slotid* base;      // the entry of the slot table the edit was made on (all zeros: an empty slot); a slot that is not that
                                   // one any more is refused before anything is written. NULL: not checked (hwsave)
@@ -99,7 +127,16 @@ typedef struct {
     uint8_t winlock;              // that is kept as it is (the bindings' files of the slot, RAW ones too)
     int has_ind;                  // ind are the indicator colours to write into PROFILE.I (profile, brightness, lock on, lock off: RGB)
     uint8_t ind[CAPE_IND_COUNT * 3];
+    // A slot read from its PROFILE.ZIP (from_zip) is saved with one: the model to write is the files to write imported with the model
+    // of the slot as the base (cape_compile_import)
+    const cape_compile_hold* hold;   // intervals of 'Imitate holding key' longer than their files can say (hwslot im:)
+    size_t nhold;
+    const uint8_t* seed;             // CAPE_SLOT_SEED_SIZE random bytes the identities of the new actions and layers of the model are
+                                     // made of, one after the other: the same seed gives the same identities (a check, its save and a
+                                     // Retry agree); NULL: none can be made, and a plan that needs one is refused
 } cape_slot_edit;
+
+#define CAPE_SLOT_SEED_SIZE 16
 
 typedef enum {
     CAPE_SLOT_REFUSED = 0,
@@ -110,12 +147,14 @@ typedef enum {
 
 #define CAPE_REPLACES_EFFECTS  0x01   // the lighting has effect layers (predefined or custom), which a write removes
 #define CAPE_REPLACES_UNKNOWN  0x02   // the lighting files were not understood, and a write replaces them
+#define CAPE_REPLACES_LAYERS   0x04   // the static layers of the model of the slot (their names, order, opacities) give way to new ones
 
 typedef struct {
     cape_slot_verdict verdict;
     char reason[CAPE_SLOT_WHY];       // for CAPE_SLOT_REFUSED
     unsigned colours;                 // the colours other than black in the picture (cape_light_pack)
-    unsigned layers;                  // the layers that will be written
+    unsigned layers;                  // total model layers for a typed edit
+    unsigned active;                  // enabled layers emitted by the compiler
     unsigned ignored;                 // LEDs with a colour that no layer can hold (cape_light_pack)
     unsigned replaces;                // CAPE_REPLACES_*
     unsigned effect_layers;           // the predefined and custom effect layers now in the slot
@@ -126,15 +165,21 @@ typedef struct {
     int bindings_changed;             // the bindings to write do something else than the slot's (hwslot)
     int winlock_changed;              // the Win Lock options to write are not the slot's (Performance)
     int indicators_changed;           // the indicator colours to write are not the slot's (Performance)
+    int model_changed;                // the model to write is not the slot's: its PROFILE.ZIP changes (a slot read from its ZIP)
     cape_slotid id;                   // the identity to write (WRITE and NEW)
 } cape_slot_plan;
 
 // Works out what to do with a slot read as old (which may be a refusal or an empty slot) to make it what edit says. The verdict is
-// SAME only if the name, the bindings, the Win Lock options, the indicator colours and the lighting are all the slot's. Bindings that are the slot's are written back as the files
+// SAME only if the name, the bindings, the Win Lock options, the indicator colours and the lighting are all the slot's, and, for a
+// slot read from its ZIP, the model to write is its model and its files are the ZIP's (not STALE). Bindings that are the slot's are written back as the files
 // that were read; other ones are built as iCUE builds them (cape_binding_build), after cape_binding_check against the slot's. For
 // WRITE and NEW the files to write are put in out, in the order iCUE writes them: the macro files, PROFILE.DAT, PROFILE.I,
 // PROFILE.MAP, then the lighting, lghtcnt.cnt last (out must have been zeroed or used before: what it holds is freed first;
-// NULL is allowed for a plan that is only a check). Returns CAPE_OK, also for a refusal, CAPE_E_ARG for bad arguments.
+// NULL is allowed for a plan that is only a check). For a slot read from its ZIP, PROFILE.ZIP goes after PROFILE.MAP: the files
+// to write imported into a model (the slot's as the base), written as a ZIP, and the ZIP read back must make exactly the other
+// files, or the plan is a refusal (nothing is written that the daemon would not read back as written). A slot read from its ZIP
+// cannot have Win Lock options other than iCUE's (bits 4 to 7). Returns CAPE_OK, also for a
+// refusal, CAPE_E_ARG for bad arguments.
 int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit, cape_slot_plan* plan, cape_slot_files* out);
 
 const char* cape_slot_verdict_name(cape_slot_verdict v);

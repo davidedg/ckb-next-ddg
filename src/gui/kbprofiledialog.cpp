@@ -50,7 +50,7 @@ void KbProfileDialog::repopulate(){
     foreach(KbProfile* profile, device->profiles()){
         QListWidgetItem* item = new QListWidgetItem(QIcon((profile == device->hwProfile()) ? ":/img/icon_profile_hardware.png" : ":/img/icon_profile.png"), profile->name(), ui->profileList);
         item->setData(GUID, profile->id().guid);
-        // hwslot1: the hardware profile is not renamed here (its name is the daemon's)
+        // hwslot: the hardware profile is not renamed here (its name is the daemon's)
         if(device->canManageProfile(profile))
             item->setFlags(item->flags() | Qt::ItemIsEditable);
         else

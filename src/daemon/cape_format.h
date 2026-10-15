@@ -335,8 +335,8 @@ int cape_macro_filename_parse(const char* name);
  *
  *   0-1     49 00
  *   2-17    GUID, the same 16 bytes as in the slot table and in the 07 15 command
- *   18-19   cookie u16, the revision counter iCUE increments on every save
- *   20-21   zeros
+ *   18-21   cookie u32 LE, the revision counter iCUE increments on every save (it counts 0 to 0xfffffe and then starts
+ *           again at 0; the slot table and the 07 15 command carry its 24 low bits)
  *   22-252  name, UTF-16LE, zero-terminated, zero-padded (the longest name iCUE accepts is not known)
  *   253-267 the four indicator colours, RGB (profile, brightness, Win Lock on, Win Lock off; iCUE's defaults are
  *           ff 00 00, ff ff ff, 00 ff ff, ff 00 00) and 3 zero bytes
@@ -349,8 +349,7 @@ int cape_macro_filename_parse(const char* name);
 
 typedef struct {
     uint8_t guid[16];
-    uint16_t cookie;
-    uint8_t pad[2];
+    uint32_t cookie;
     uint8_t name_area[CAPE_INFO_NAME_AREA];
     uint8_t tail[CAPE_INFO_TAIL_SIZE];
 } cape_info;
@@ -371,16 +370,22 @@ int cape_info_set_name(cape_info* info, const uint16_t* name, size_t units);
  * of the reply) and the payload of the "07 15 <slot> 00" command that sets them.
  *
  *   0-15    GUID (an empty slot has all zeros)
- *   16-17   cookie u16
- *   18-19   00 01
+ *   16-18   cookie u24 LE (the 24 low bits of the cookie of PROFILE.I)
+ *   19      01 for a slot with a profile, 00 for an empty one
  */
 #define CAPE_SLOTID_SIZE  20
+#define CAPE_SLOTID_FLAG  0x01
+// The largest cookie: iCUE counts 0 to 0xfffffe and then starts again at 0
+#define CAPE_COOKIE_MAX   0xfffffeu
 
 typedef struct {
     uint8_t guid[16];
-    uint16_t cookie;
-    uint8_t flags[2];
+    uint32_t cookie;     // 0..0xffffff as read; at most CAPE_COOKIE_MAX in what is written
+    uint8_t flag;        // CAPE_SLOTID_FLAG, or 0 for an empty slot
 } cape_slotid;
+
+// The cookie of the next save of a profile whose cookie is c: c + 1, and 0 after CAPE_COOKIE_MAX (as iCUE)
+uint32_t cape_cookie_next(uint32_t c);
 
 // Returns CAPE_OK.
 int cape_slotid_parse(const uint8_t* buf, size_t len, cape_slotid* out);
@@ -463,7 +468,8 @@ void cape_light_desc_static(cape_light_desc* d);
 
 /*
  * A custom effect (corsair-protocol formats/cape/custom-effects.md): the 41-byte header of lght_NN.d and the colour curve of the layer, sampled
- * CAPE_LIGHT_SAMPLES times over its duration (sample j is at time j/128 of it, straight RGBA, transparent before
+ * CAPE_LIGHT_SAMPLES times: marks 0, 0, then floor((j-1)*1000/127) for j=2..127, in thousandths of the duration.
+ * Colours are straight RGBA, transparent before
  * the first transition and after the last). Bytes that nothing is known about are kept, so that a descriptor
  * builds back exactly; every file seen has them zero. A writer that builds a layer from these fields would
  * drop them, so a layer where they are not zero should be kept as it was read.
@@ -473,16 +479,16 @@ typedef struct {
     uint8_t tail;                 // Wave and Ripple: length of the tail in lights; zero in Solid and Gradient
     uint8_t velocity;             // Wave and Ripple: lights per second
     uint8_t two_sided;            // Wave: 1 if it starts from both sides; zero elsewhere
-    uint8_t unknown4;             // 1 in every Wave and Ripple seen, zero in Solid and Gradient; no option of iCUE changes it
-    uint32_t angle;               // Wave: degrees (0, 90, 180 and 270 seen); zero elsewhere
-    int32_t origin_x;             // where the animation starts, in the units of iCUE's drawing of the keyboard (6.7.3)
+    uint8_t unknown4;             // Wave: 1; Ripple: 1, 3, 5, 7 for its four spread modes; zero elsewhere
+    uint32_t angle;               // Wave: degrees, 0..359; zero elsewhere
+    int32_t origin_x;             // scaled LED-anchor coordinates, truncated toward zero
     int32_t origin_y;             //   (signed: an empty key list is -86, -13); zero in Solid and Gradient
     uint8_t start_on_key_press;   // the four flags are iCUE's executionHints of the layer
     uint8_t start_with_profile;
     uint8_t stop_on_key_press;
     uint8_t stop_on_key_release;
     uint16_t duration_100ms;      // duration of the cycle, in units of 0.1 s
-    uint16_t stop_after_times;    // 'stop later', this many times; 0 when not set (presumed 16 bits wide: 0 and 4 seen)
+    uint16_t stop_after_times;    // 'stop later', this many times; 0 when not set
     uint8_t reserved1[12];        // bytes 25 to 36
     uint8_t reserved2[3];         // bytes 38 to 40, after the number of samples
     cape_rgba samples[CAPE_LIGHT_SAMPLES];

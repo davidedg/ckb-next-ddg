@@ -5,9 +5,10 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include "hwlightingmodel.h"
 #include <vector>
 
-// The hardware bindings of a K95 RGB Platinum slot on the GUI's side of hwslot1 (the specification is the comment of
+// The hardware bindings of a K95 RGB Platinum slot on the GUI's side of hwslot (the specification is the comment of
 // src/daemon/cape_hwslot.h): the record the daemon sends for a slot,
 // read strictly, and the words of the preparation of a save. Plain C++11, no Qt.
 namespace HwBinding {
@@ -19,9 +20,12 @@ constexpr unsigned TEXT_MAX = 300;      // encoded bytes of the text of one name
 constexpr unsigned EVENT_BYTES = 128;   // bytes of the events of one e:/ev: word (cape_hwslot.h)
 constexpr unsigned NAME_WORDS = 8;
 constexpr unsigned NAME_UNITS = 114;    // UTF-16 units of a profile name
+constexpr unsigned TX_WORDS = 48;       // tx: words of one string at most
+// 'Imitate holding key' on press: the longest interval a file can say (the delay c0 ff ff ff), and iCUE's longest (99 999 s)
+constexpr unsigned long IMITATE_FILE_MAX = 16777215, IMITATE_MAX = 99999000;
 
 enum Subtype : uint8_t { MACRO = 0, SHORTCUT = 1, TEXT = 3 };
-enum Flag : unsigned { SHARED = 0x01, NON_ICUE = 0x02, LOCKED = 0x04 };
+enum Flag : unsigned { SHARED = 0x01, NONCANONICAL = 0x02, LOCKED = 0x04 };
 
 // One event of a macro file, as in the file: 2 bytes, or 4 when bit 6 of the first byte is set (corsair-protocol formats/cape/macro.md).
 // The bytes past its length are zero (the functions below make them so); two events are the same by their own bytes.
@@ -55,8 +59,17 @@ struct Action {
     std::vector<Event> events;          // MACRO
     std::string file;                   // the name of its file in the slot ("" for a new one): shown, not compared
     unsigned flags = 0;                 // Flag, from the record: not compared
-    // The same for the keyboard: kind, destination, subtype, start, run, repeat and every event
+    // 'Imitate holding key' on press longer than its file can say (its events: a press, the delay c0 ff ff ff, a release): the
+    // interval of the slot's PROFILE.ZIP, more than IMITATE_FILE_MAX and at most IMITATE_MAX (im:); 0 for any other action
+    unsigned long imitateMs = 0;
+    // A Text (subtype 03): its string as iCUE keeps it (tx:, UTF-8, with its line ends and the characters its table leaves out
+    // of the events); shown, not compared: a save keeps the slot's string for the same events
+    std::string text;
+    // The same for the keyboard and for the slot's PROFILE.ZIP: kind, destination, subtype, start, run, repeat, every event, and
+    // the interval of an Imitate longer than its file can say
     bool sameAs(const Action& o) const;
+    // Its events are a press, the delay c0 ff ff ff and a release: an Imitate on press at least as long as a file can say
+    bool longestImitate() const;
 };
 
 typedef std::array<Action, KEYS> Keys;
@@ -71,11 +84,15 @@ const std::array<uint8_t, 12> DEFAULT_INDICATORS = {{0xff, 0x00, 0x00, 0xff, 0xf
 
 // The record of a slot (section 1)
 struct Record {
-    enum State { EMPTY, OK, RAW, BROKEN } state = EMPTY;
+    // OK: bindings that are a model (st:ok); EMPTY: an empty slot; READONLY: a slot that cannot be rewritten, no bindings known
+    // (st:none)
+    enum State { EMPTY, OK, READONLY } state = EMPTY;
     enum Light { STATIC, NONE, EFFECTS, UNKNOWN } light = NONE;
+    // What is wrong with the slot's PROFILE.ZIP: the first four come with readonly, STALE (the files are not the ZIP's: a save
+    // writes them again) does not
+    enum Zip { ZIP_OK, ZIP_NONE, ZIP_UNKNOWN, ZIP_CORRUPT, ZIP_UNCOMPILABLE, ZIP_STALE } zip = ZIP_OK;
     std::string id;                     // "0" or "<guid>:<rev>", as :hwid prints it
-    std::string reason;                 // RAW and BROKEN, UTF-8
-    bool readonly = false;              // the slot cannot be rewritten at all (PROFILE.I), whatever its bindings are
+    bool readonly = false;              // the slot cannot be rewritten (READONLY): its PROFILE.I, or its PROFILE.ZIP (zip)
     std::string readonlyWhy;            // UTF-8
     bool hasName = false;
     std::string name;                   // UTF-8
@@ -83,11 +100,17 @@ struct Record {
     uint8_t winlock = 0;
     bool hasIndicators = false;
     std::array<uint8_t, 12> indicators{};
-    unsigned layers = 0;
+    unsigned layers = 0;              // derived from lighting, never a separate wire property
+    HwLighting::Model lighting;
+    bool activeEffects() const {
+        for(uint32_t i = 0; i < lighting.data().count; ++i)
+            if(lighting.data().layers[i].enabled && lighting.data().layers[i].effect.kind != CAPE_PROFILE_STATIC) return true;
+        return false;
+    }
     Keys keys;
 };
 
-// One line of an answer to "get :hwbind": a page, or an error
+// One line of an answer to "get :hwslot": a page, or an error
 struct Page {
     unsigned mode = 0;
     unsigned long gen = 0;
@@ -108,14 +131,13 @@ struct Stage {
     bool hasName = false;
     std::string name;                   // UTF-8, 1..114 UTF-16 units
     bool keepLight = true;
-    std::map<std::string, uint32_t> rgb;    // light:pic: the colour of each LED (0xrrggbb; black ones are left out)
+    HwLighting::Model lighting;        // light:model: the complete ordered list
     bool hasWinlock = false;            // wl: the Win Lock options to write (none: the slot's)
     uint8_t winlock = 0x01;
     bool hasIndicators = false;         // ind: the indicator colours to write (none: the slot's)
     std::array<uint8_t, 12> indicators{};
     bool keepBindings = true;
-    bool recreate = false;
-    Keys keys;
+    Keys keys;                          // bind:model, with the interval of each Imitate longer than its file can say (im:)
 };
 // The words from begin to end, in the order and with the cuts the specification gives. Empty if the stage cannot be said (an event
 // outside the keys, a name that is not UTF-8 or too long, a txn or mode out of range).
@@ -125,6 +147,10 @@ std::vector<std::string> packLines(unsigned owner, const std::vector<std::string
 std::string checkLine(unsigned owner, const Stage& s);
 std::string saveLine(unsigned owner, const Stage& s);
 std::string abortLine(unsigned owner, const Stage& s);
+
+// An id as :hwid prints it and the daemon reads it (cape_hwslot_parse_id): "0", or "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}:<rev>"
+// with the GUID in upper case and rev in lower case hex without leading zeros
+bool validId(const std::string& id);
 
 // Percent-encoding and UTF-8, as the protocol has them
 std::string encode(const std::string& bytes);

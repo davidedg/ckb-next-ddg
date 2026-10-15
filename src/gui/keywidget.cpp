@@ -389,7 +389,8 @@ void KeyWidget::paintGL(){
             continue;
         // Set color based on key highlight
         painter.setOpacity(1.);
-        if(highlight.testBit(i)){
+        painter.setPen(_selectionOutline && highlight.testBit(i) ? QPen(QColor(35,145,215), 1.5) : QPen(Qt::NoPen));
+        if(highlight.testBit(i) && !_selectionOutline){
             if(animation.testBit(i))
                 painter.setBrush(QBrush(highlightAnimColor));
             else

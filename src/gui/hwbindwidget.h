@@ -7,6 +7,7 @@
 #include "hwbinding.h"
 #include "hwbindedit.h"
 #include "hwslotdraft.h"
+#include "hwtextshape.h"
 
 class KeyWidget;
 class QMenu;
@@ -14,7 +15,7 @@ class QAction;
 class HwTextXkb;
 namespace Ui { class HwBindWidget; }
 
-// The Binding tab of a mode of the hardware profile of a K95 RGB Platinum (hwslot1): the bindings of the slot's draft, edited in
+// The Binding tab of a mode of the hardware profile of a K95 RGB Platinum (hwslot): the bindings of the slot's draft, edited in
 // place. The keyboard shows what each key does; for the selected keys the action is Default, a Remap (iCUE's four tabs: a key
 // of its keyboard, also with 'Imitate holding key', a mouse button, a Shortcut, a Language key), a Macro (a table of events, with its
 // start and run), or a Text typed with the layout of the device. Apply puts the action on every selected key after the same checks
@@ -35,9 +36,6 @@ public:
     void setSlot(const HwBinding::Record* base, HwSlotDraft::Draft* draft, const KeyMap& map, const QString& layout,
                  bool editable, const QString& why);
     void setControlsEnabled(bool e);
-    // A slot whose bindings are not a model: offer to recreate them from scratch (active: they are being recreated)
-    void setRecreate(bool offered, bool active);
-    bool recreateOffered() const;
 
     // What the editor shows and does, also for the tests
     QStringList selection() const { return currentSelection; }
@@ -72,6 +70,8 @@ public:
     void setShortcut(const QStringList& keys);
     void setText(const QString& text, unsigned delayMs);
     QString textPreview() const;
+    // The line under the field of a Text that is saved as a Macro (empty when there is none, or when a refusal is shown instead)
+    QString textNote() const;
     bool textAvailable() const { return xkb != nullptr; }
     // The recorder: while recording only Stop is enabled; the events recorded replace the rows of the Macro
     bool recording() const { return isRecording; }
@@ -84,8 +84,6 @@ signals:
     void copyRequested(const QStringList& keys);
     // Start (true) or stop (false) the recorder
     void recordRequested(bool start);
-    // Recreate the bindings from scratch (true), or keep the slot's (false)
-    void recreateRequested(bool on);
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
@@ -113,6 +111,7 @@ private slots:
     void shortcutChanged();
     void clearShortcut();
     void updateTextPreview();
+    void terminateChanged();
     // The Text field takes TEXT_CHARS_MAX characters (iCUE's field): what typing or pasting adds past that, or past a longer text the
     // field was filled with, is taken out again in the same undo step. fillText() fills the field from the program, never cut
     void limitText();
@@ -134,6 +133,11 @@ private:
     QString xkbLayout, layoutName;           // the layout of ckb-next, and its name as the Settings show it
     bool windowsTable = false;               // a table of the Windows layout exists: AltGr only on its keys
     bool textRebuilt = false;                // the Text shown was rebuilt from the slot's events
+    // The Text of the action shown: the field as it was filled, and the keys of the action; the field left as it is keeps them
+    QString loadedText;
+    std::vector<HwTextShape::Stroke> loadedStrokes;
+    bool loadedTextKeys = false;
+    QPalette terminatePalette;               // the field "Terminate in" as the style draws it (not red)
     int textAccepted = 0;                    // characters of the Text field after its last change: it may shrink, not grow past TEXT_CHARS_MAX
     QString textPreviewText;
 
@@ -145,7 +149,6 @@ private:
     QMenu* macroMenu;
     QAction *copyAction, *pasteAction, *upAction, *downAction, *removeAction;
     std::vector<HwBindEdit::Row> macroClipboard;           // Copy of the context menu: inside the editor, not the system's
-    bool recreateActive = false;
 
     int indexOf(const QString& key) const;
     const HwBinding::Action* baseAction(int index) const;
@@ -162,6 +165,8 @@ private:
     QSize pickerAround() const;
     void arrange();
     QString textRefusal(const std::u32string& rejected, const std::u32string& notOnWindows) const;
+    std::vector<HwTextShape::Stroke> textStrokes(const QString& field, std::u32string& rejected, std::u32string& notOnWindows,
+                                                 QStringList& differing) const;
     void resetRemap();
     void placePicker();
     void refreshShortcut();

@@ -44,8 +44,14 @@ typedef struct {
     unsigned packets;                     // packets the session sent for this load
 } cape_hwload;
 
-// Reads what hwload needs from an open session (cape_session_open): the slots of whole_mask (bit i = slot index i) read whole
-// (cape_slot_read: PROFILE.I, the bindings and the lighting with all its files), the others only their PROFILE.I
+// How much of a slot is read: its PROFILE.I only; all of it as the daemon reads it, from its PROFILE.ZIP (cape_slot_read_zip); all of
+// its files themselves (cape_slot_read: the tools and the tests that look at them)
+#define CAPE_HWLOAD_HEAD   0
+#define CAPE_HWLOAD_ZIP    1
+#define CAPE_HWLOAD_FILES  2
+
+// Reads what hwload needs from an open session (cape_session_open): the slots of whole_mask (bit i = slot index i) read whole from
+// their files (cape_slot_read: PROFILE.I, the bindings and the lighting with all its files), the others only their PROFILE.I
 // (cape_slot_read_head: the identity, the name and the indicator colours; whole = 0 in the image, the lighting unknown), as iCUE reads
 // them when it starts. The attach reads no slot whole (the bindings and the lighting of a slot are read when they are
 // asked for, cape_hwload_read_one()). A slot whose GUID in the table is all zeros is empty: nothing is sent for it. A slot without a valid PROFILE.I keeps its identity and gets an empty name, with a warning, and the load goes on. The
@@ -59,10 +65,10 @@ int cape_hwload_read_all(cape_session* s, cape_hwload* out, cape_slot_image imag
                          void* logctx);
 // Every slot in use read whole, without the images
 int cape_hwload_read(cape_session* s, cape_hwload* out, cape_logfn log, void* logctx);
-// One slot, as cape_hwload_read_all() reads it: whole or its PROFILE.I only, into out->slot[slot] (the rest of *out is left as it
+// One slot, as cape_hwload_read_all() reads it, as much of it as how says (CAPE_HWLOAD_*), into out->slot[slot] (the rest of *out is left as it
 // is; its warnings are added to) and *img, which the caller frees with cape_slot_image_free() whatever is returned. Returns CAPE_OK,
 // or the error that ended the session (then out->slot[slot] and *img are not to be used).
-int cape_hwload_read_one(cape_session* s, unsigned slot, int whole, cape_hwload* out, cape_slot_image* img, cape_logfn log, void* logctx);
+int cape_hwload_read_one(cape_session* s, unsigned slot, int how, cape_hwload* out, cape_slot_image* img, cape_logfn log, void* logctx);
 void cape_hwload_images_free(cape_slot_image images[CAPE_SLOTS]);
 
 // The slot as cape_hwload_read() would give it, from the files of a slot and its entry of the table (a save that was written and

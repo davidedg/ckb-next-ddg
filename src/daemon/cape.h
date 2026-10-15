@@ -111,6 +111,8 @@ typedef struct cape_session {
     int slot;                        // slot selected for file operations, -1 until the first selection
     int file_open;                   // a file is (or may be) open on the keyboard
     cape_fwinfo fw;                  // what the keyboard said about itself
+    int layout;                      // and its physical layout: byte 23 of the identification plus one, as the daemon keeps it
+                                     // (1 ANSI, 2 ISO, 3 ABNT, 4 JIS, 5 KS; the lighting files of a slot depend on it)
     cape_slotid slots[CAPE_SLOTS];   // slot table read when the session was opened
     uint8_t last_status;             // last "0e 17 0d" status byte
     unsigned tx_packets;             // packets handed to io (attempts)
@@ -125,7 +127,8 @@ typedef struct cape_session {
 
 // 1 if the 64-byte packet is one of the read-only commands, 0 otherwise. The list, all with zero padding:
 //   0e 01 00                         identification
-//   0e 17 01 00 | 0e 17 04 00 | 0e 17 0d 00 | 0e 17 03 01
+//   0e 17 01 00 | 0e 17 04 00 | 0e 17 0d 00
+//   0e 17 03 01 | 0e 17 03 00      the size of the open file, the total size of the files of the selected slot
 //   07 17 0c 0N                      select slot N (0..2) for file operations; does not change the active slot
 //   07 17 07 00 <name>               open a file for reading (name: see cape_name_valid)
 //   07 17 0a 00                      fill the read buffer with the next 300 bytes
@@ -183,6 +186,10 @@ int cape_session_fail(cape_session* s, int err);
 // (the session stays usable), CAPE_E_CAP (the file is larger than cap, *len has its size, the session stays
 // usable), CAPE_E_RANGE (bad slot or name, nothing sent), or a failure that ends the session.
 int cape_read_file(cape_session* s, unsigned slot, const char* name, uint8_t* buf, size_t cap, size_t* len);
+
+// The total size of the files of slot 0..2 ("0e 17 03 00" once the slot is selected: the sum of the sizes of its files, 0 for an
+// empty slot) into *bytes. Returns CAPE_OK, CAPE_E_RANGE (bad slot, nothing sent), or a failure that ends the session.
+int cape_slot_bytes(cape_session* s, unsigned slot, uint32_t* bytes);
 
 // Ends the session. Closes a file that is still open. Never fails.
 void cape_session_close(cape_session* s);

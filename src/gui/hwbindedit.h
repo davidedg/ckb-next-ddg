@@ -5,7 +5,7 @@
 #include <vector>
 #include "hwbinding.h"
 
-// What the editor of the hardware bindings of a K95 RGB Platinum (hwslot1) makes of an action and back: the kind it shows an
+// What the editor of the hardware bindings of a K95 RGB Platinum (hwslot) makes of an action and back: the kind it shows an
 // action as, the events of a Shortcut, the rows of the event table of a Macro, and the checks a new or changed action must pass
 // before it goes to the draft (the same ones the daemon makes before it writes anything, cape_binding_check()). Plain C++11.
 namespace HwBindEdit {
@@ -14,11 +14,12 @@ constexpr unsigned EVENTS_MAX = 8191;       // events of one new or changed acti
 constexpr unsigned TEXT_CHARS_MAX = 1024;   // characters that can be typed or pasted into a new Text: iCUE's field (a line break is one)
 // What iCUE's GUI takes for a hardware profile (corsair-protocol formats/cape/macro.md): a delay of a Macro, constant or random, up to 4095 ms; a
 // Macro of up to 256 rows (its editor shows every event, delays of 0 too); a Text up to 99999 ms between characters; 'Imitate holding
-// key' On press 0.1 to 16 777.2 s
+// key' On press 0.1 to 99 999 s, of which the keyboard waits at most 16 777.2 s (a longer one is written as its longest delay,
+// c0 ff ff ff, and its interval kept in the slot's PROFILE.ZIP: im:)
 constexpr unsigned MACRO_DELAY_MAX = 4095;  // ms
 constexpr unsigned MACRO_ROWS_MAX = 256;
 constexpr unsigned TEXT_DELAY_MAX = 99999;  // ms
-constexpr unsigned IMITATE_MIN_MS = 100, IMITATE_MAX_MS = 16777200;
+constexpr unsigned IMITATE_MIN_MS = 100, IMITATE_MAX_MS = 16777200, IMITATE_ARCHIVE_MAX_MS = 99999000;
 constexpr uint8_t START_PRESS = 0x00, START_RELEASE = 0x11;
 constexpr uint8_t RUN_ONCE = 0x01, RUN_WHILE_PRESSED = 0x03, RUN_TOGGLE = 0x04;
 constexpr uint8_t RUN_IMITATE_TOGGLE = 0x84;   // 'Imitate holding key' Toggle: a Keystroke run 84, repeat 0
@@ -33,10 +34,11 @@ Kind kindOf(const HwBinding::Action& a);
 
 // Whether iCUE writes these values for a macro of this subtype (the daemon refuses others for a new or changed action); the
 // Keystroke run 84 repeat 0 is 'Imitate holding key' Toggle, whose events kindOf() and check() look at
-bool icueValues(uint8_t subtype, uint8_t start, uint8_t run, uint8_t repeat);
+bool canonicalValues(uint8_t subtype, uint8_t start, uint8_t run, uint8_t repeat);
 
 // 'Imitate holding key' (iCUE's Keyboard remap with that option): the key held and, On press, for how long; false if the action is
-// not one in iCUE's form (a key of its keyboard, not a media key; On press 100 to 16 777 200 ms in steps of 100)
+// not one in iCUE's form (a key of its keyboard, not a media key; On press 100 to 99 999 000 ms in steps of 100, from 16 777 300
+// ms the delay c0 ff ff ff with the interval of im:). imitatePress() makes such an action of any of those times
 bool recognizeImitate(const HwBinding::Action& a, uint8_t& key, unsigned& ms, bool& toggle);
 HwBinding::Action imitatePress(uint8_t key, unsigned ms);
 HwBinding::Action imitateToggle(uint8_t key);
@@ -51,7 +53,7 @@ bool recognizeShortcut(const std::vector<HwBinding::Event>& ev, std::vector<uint
 // is iCUE's whatever the order of the clicks. False with why when the keys break a rule (keys are then left as they came).
 bool shortcutKeys(std::vector<uint8_t>& keys, std::string& why);
 // Whether keys, made by shortcutKeys(), are those of iCUE's rules and order
-bool isIcueShortcut(const std::vector<uint8_t>& keys);
+bool isCanonicalShortcut(const std::vector<uint8_t>& keys);
 
 // One row of the event table of a Macro, one event each (also every delay of 0: iCUE's editor shows them)
 struct Row {

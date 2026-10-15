@@ -75,6 +75,23 @@
      </property>
     </widget>
    </item>
+   <item row="5" column="0">
+    <widget class="QPushButton" name="hwReloadButton">
+     <property name="text">
+      <string>Reload Slot...</string>
+     </property>
+     <property name="toolTip">
+      <string>Read the selected slot from the keyboard and replace its local draft after confirmation.</string>
+     </property>
+    </widget>
+   </item>
+   <item row="6" column="0">
+    <widget class="QPushButton" name="hwEraseButton">
+     <property name="text">
+      <string>Erase selected slot...</string>
+     </property>
+    </widget>
+   </item>
    <item row="1" column="0">
     <widget class="ModeListWidget" name="modesList">
      <property name="sizePolicy">
@@ -178,7 +195,7 @@
      </attribute>
     </widget>
    </item>
-   <item row="0" column="1" rowspan="5">
+   <item row="0" column="1" rowspan="7">
     <widget class="QTabWidget" name="tabWidget">
      <property name="sizePolicy">
       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">

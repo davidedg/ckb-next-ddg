@@ -7,15 +7,13 @@
 namespace Ui { class HwPerfWidget; }
 class ColorButton;
 class QCheckBox;
-class QLabel;
 class QPushButton;
 
 // The Performance tab of a mode of the hardware profile of a K95 RGB Platinum: the performance settings of the slot's draft,
 // as iCUE's Performance panel has them, in the layout of ckb-next's software Performance tab (hwperfwidget.ui). Top row: the
 // indicator colours (Profile, Brightness at 100%, Windows Lock on and off); When Lock button is on: the four Win Lock options (byte
 // 1 of PROFILE.DAT, in iCUE's order); Miscellaneous: Copy performance settings to slot... and Restore defaults. The bits of the
-// byte iCUE never writes (4..7) are kept as they are, with a note. Nothing here goes to the daemon: the draft is saved with Save
-// slot.
+// byte iCUE never writes (4..7) are not shown, and not saved. Nothing here goes to the daemon: the draft is saved with Save slot.
 class HwPerfWidget : public QWidget
 {
     Q_OBJECT
@@ -34,7 +32,6 @@ public:
     enum Colour { PROFILE, BRIGHTNESS, LOCK_ON, LOCK_OFF };
     ColorButton* colourButton(Colour c) const;
     QCheckBox* option(uint8_t bit) const;           // 0x01 Windows key, 0x02 Alt+Tab, 0x04 Alt+F4, 0x08 Shift+Tab
-    QLabel* unknownNote() const { return note; }
     QPushButton* restoreButton() const { return restore; }
     QPushButton* copyButton() const { return copy; }
 
@@ -48,13 +45,10 @@ private:
     // The widgets of the .ui, by what they are
     ColorButton* colours[4];
     QCheckBox* options[4];
-    QLabel* note;
     QPushButton* restore;
     QPushButton* copy;
-    uint8_t winlock = HwBinding::DEFAULT_WINLOCK;   // what is shown, bits 4..7 included
     bool filling = false;
     void changed();
-    void showNote();
 };
 
 #endif // HWPERFWIDGET_H

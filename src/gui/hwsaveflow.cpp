@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <climits>
+#include <initializer_list>
 #include <sstream>
 #include <unordered_map>
 
@@ -30,6 +31,13 @@ bool field(const Reply& r, const char* key, const char* value = nullptr) {
     return p != r.fields.end() && (!value || p->second == value);
 }
 
+// No field but these
+bool only(const Reply& r, std::initializer_list<const char*> keys) {
+    for(const auto& f : r.fields)
+        if(std::none_of(keys.begin(), keys.end(), [&f](const char* k){ return f.first == k; })) return false;
+    return true;
+}
+
 // A complete notification line only. In particular, "hwsave progress" is never a terminal.
 Reply parse(const std::string& raw) {
     Reply r;
@@ -40,7 +48,7 @@ Reply parse(const std::string& raw) {
     std::string word, mode;
     if(!(in >> word) || word != "mode" || !(in >> mode) || !number(mode, r.mode) ||
        !(in >> r.type) || !(in >> r.verdict)) return r;
-    if(r.type != "hwsave" && r.type != "hwsavecheck") return r;
+    if(r.type != "hwsave" && r.type != "hwsavecheck" && r.type != "hwerase") return r;
     // (a check sends "hwsavecheck progress" lines while it reads: a heartbeat)
     if(r.verdict == "progress") {
         std::string done, total, extra;
@@ -62,24 +70,25 @@ Reply parse(const std::string& raw) {
             std::getline(in, tail);
             value += tail;
         }
-        const std::string known = "|colours|layers|ignored|packets|kept|buttons|name|replaces|reason|err|stage|file|slot|"
-                                  "bindings|lights|hwmode|space|";
-        const std::string known_perf = "|winlock|indicators|";   // (the performance settings)
+        const std::string known = "|colours|layers|active|packets|kept|name|reason|err|stage|file|slot|"
+                                  "bindings|lights|hwmode|space|gen|";
+        const std::string known_perf = "|winlock|indicators|model|";   // (the performance settings, the slot's PROFILE.ZIP)
+        if(known.find("|" + key + "|") == std::string::npos && known_perf.find("|" + key + "|") == std::string::npos) return r;
         if(r.fields.count(key) && known.find("|" + key + "|") != std::string::npos) return r;
         if(r.fields.count(key) && known_perf.find("|" + key + "|") != std::string::npos) return r;
         r.fields[key] = value;
     }
     unsigned n;
-    for(const char* key : {"colours", "layers", "ignored", "packets"})
+    for(const char* key : {"colours", "layers", "active", "packets", "gen"})
         if(field(r, key) && !number(r.fields[key], n)) return r;
     if(field(r, "kept") && !field(r, "kept", "yes") && !field(r, "kept", "no")) return r;
     if(field(r, "slot") && !field(r, "slot", "unchanged") &&
        !field(r, "slot", "incomplete") && !field(r, "slot", "written")) return r;
-    if(field(r, "buttons") && !field(r, "buttons", "changed")) return r;
     if(field(r, "name") && !field(r, "name", "changed")) return r;
     if(field(r, "bindings") && !field(r, "bindings", "changed")) return r;
     if(field(r, "winlock") && !field(r, "winlock", "changed")) return r;
     if(field(r, "indicators") && !field(r, "indicators", "changed")) return r;
+    if(field(r, "model") && !field(r, "model", "changed")) return r;
     if(field(r, "lights") && !field(r, "lights", "kept")) return r;
     if(field(r, "hwmode") && !field(r, "hwmode", "failed")) return r;
     if(field(r, "space")) {
@@ -87,15 +96,17 @@ Reply parse(const std::string& raw) {
         const size_t slash = v.find('/');
         if(slash == std::string::npos || !number(v.substr(0, slash), n) || !number(v.substr(slash + 1), n)) return r;
     }
-    if(field(r, "replaces")) {
-        const std::string& v = r.fields["replaces"];
-        if(v != "effects" && v != "unknown" && v != "effects,unknown" && v != "unknown,effects") return r;
-    }
     if(r.type == "hwsavecheck") {
         if(r.verdict == "error") r.valid = field(r, "err") && !r.fields["err"].empty();
         else if(r.verdict == "same" || r.verdict == "write" || r.verdict == "new" || r.verdict == "refused")
-            r.valid = field(r, "colours") && field(r, "layers") &&
+            r.valid = field(r, "colours") && field(r, "layers") && field(r, "active") &&
+                      std::stoul(r.fields["active"]) <= std::stoul(r.fields["layers"]) &&
                       (r.verdict != "refused" || field(r, "reason"));
+    } else if(r.type == "hwerase") {
+        // an erase: "ok gen=<gen> packets=<n> [hwmode=failed]", "refused reason=<text>", "fail [hwmode=failed ]err=<text>"
+        if(r.verdict == "ok") r.valid = field(r, "gen") && field(r, "packets") && only(r, {"gen", "packets", "hwmode"});
+        else if(r.verdict == "refused") r.valid = field(r, "reason") && !r.fields["reason"].empty() && only(r, {"reason"});
+        else if(r.verdict == "fail") r.valid = field(r, "err") && !r.fields["err"].empty() && only(r, {"err", "hwmode"});
     } else if(r.verdict == "ok") r.valid = field(r, "packets");
     else if(r.verdict == "skipped")
         r.valid = field(r, "refused"); // daemon sends a bare "refused", handled below
@@ -119,7 +130,7 @@ Reply parse_save_skipped(const std::string& raw) {
     r.verdict = "skipped";
     r.phase = subtype;
     if(!(in >> rest)) return r;
-    if(rest == "hwmode=failed") { // a save from hardware mode (hwslot1) that could not switch back
+    if(rest == "hwmode=failed") { // a save from hardware mode (hwslot) that could not switch back
         r.fields["hwmode"] = "failed";
         if(!(in >> rest)) return r;
     }
@@ -139,9 +150,8 @@ void HwSaveFlow::queue_event(EventKind kind, unsigned mode, const std::string& t
 }
 
 bool HwSaveFlow::start(const std::vector<Slot>& slots, bool all, int64_t now_ms) {
-    // Save ALL: the slots in order, one to three (hwslot1 leaves out a slot not read from the keyboard and not changed)
+    // Save ALL: the slots in order, one to three (hwslot leaves out a slot not read from the keyboard and not changed)
     if(busy() || slots.empty() || slots.size() > 3u || (!all && slots.size() != 1u)) return false;
-    const bool staged = !slots[0].check_line.empty();
     bool seen[4] = {false, false, false, false};
     for(size_t i = 0; i < slots.size(); ++i) {
         const Slot& s = slots[i];
@@ -149,8 +159,7 @@ bool HwSaveFlow::start(const std::vector<Slot>& slots, bool all, int64_t now_ms)
         if(all && i > 0 && s.mode <= slots[i - 1].mode) return false;
         seen[s.mode] = true;
         std::vector<std::string> lines = s.prepare;
-        if(staged) { lines.push_back(s.check_line); lines.push_back(s.save_line); lines.push_back(s.abort_line); }
-        else if(!s.check_line.empty() || !s.save_line.empty() || !s.abort_line.empty()) return false;
+        lines.push_back(s.check_line); lines.push_back(s.save_line); lines.push_back(s.abort_line);
         for(const std::string& command : lines)
             if(command.empty() || command.back() != '\n' || command.find('\n') != command.size() - 1) return false;
     }
@@ -160,9 +169,31 @@ bool HwSaveFlow::start(const std::vector<Slot>& slots, bool all, int64_t now_ms)
     approved_.clear(); events_.clear(); cursor_ = prep_cursor_ = save_cursor_ = 0;
     completed_ = last_progress_ = 0; send_id_ = dialog_id_ = 0;
     send_pending_ = waiting_send_ = waiting_reply_ = aborted_ = wrote_ = refresh_failed_ = false;
-    staged_ = staged; check_only_ = staged && !hwslot_save_enabled; aborts_.clear(); now_ = now_ms;
+    check_only_ = !hwslot_save_enabled; erase_ = false; aborts_.clear(); now_ = now_ms;
     state_ = Preparing;
     next_prepare(now_ms);
+    return true;
+}
+
+bool HwSaveFlow::start_erase(unsigned mode, const std::string& line, int64_t now_ms) {
+    if(busy() || mode < 1 || mode > 3 || line.empty() || line.back() != '\n' || line.find('\n') != line.size() - 1) return false;
+    Slot s;
+    s.mode = mode;
+    slots_.assign(1, s); all_ = false; checks_.assign(1, Check());
+    outcomes_.assign(1, Outcome(mode, "not-tried", ""));
+    approved_.clear(); events_.clear(); cursor_ = prep_cursor_ = save_cursor_ = 0;
+    completed_ = last_progress_ = 0; send_id_ = dialog_id_ = 0;
+    send_pending_ = waiting_send_ = waiting_reply_ = aborted_ = wrote_ = refresh_failed_ = false;
+    check_only_ = false; erase_ = true; aborts_.clear(); now_ = now_ms;
+    if(!hwslot_save_enabled) {
+        // The save shut in this build: the erase too, nothing sent
+        outcomes_[0].verdict = "disabled";
+        state_ = Saving;
+        finish();
+        return true;
+    }
+    state_ = Saving;
+    command(line, EraseCommand, now_ms);
     return true;
 }
 
@@ -188,8 +219,7 @@ void HwSaveFlow::next_prepare(int64_t now_ms) {
 void HwSaveFlow::next_check(int64_t now_ms) {
     if(cursor_ == slots_.size()) { after_checks(now_ms); return; }
     state_ = Checking; last_beat_ = 0;
-    command(staged_ ? slots_[cursor_].check_line :
-            "mode " + std::to_string(slots_[cursor_].mode) + " get :hwsavecheck\n", CheckCommand, now_ms);
+    command(slots_[cursor_].check_line, CheckCommand, now_ms);
 }
 
 void HwSaveFlow::send_result(uint64_t id, SendResult result, int64_t now_ms) {
@@ -203,7 +233,7 @@ void HwSaveFlow::send_result(uint64_t id, SendResult result, int64_t now_ms) {
     if(command_kind_ == PrepareCommand) { ++prep_cursor_; next_prepare(now_ms); return; }
     if(command_kind_ == AbortCommand) { next_abort(now_ms); return; }
     waiting_reply_ = true;
-    waiting_type_ = command_kind_ == CheckCommand ? "hwsavecheck" : "hwsave";
+    waiting_type_ = command_kind_ == CheckCommand ? "hwsavecheck" : command_kind_ == EraseCommand ? "hwerase" : "hwsave";
     deadline_ = now_ms + 30000;
 }
 
@@ -263,29 +293,14 @@ void HwSaveFlow::after_checks(int64_t now_ms) {
         std::string verdict = c.verdict;
         if(verdict == "refused") verdict = "refused";
         else if(all_ && c.kept) verdict = "recovery";
-        else if(all_ && verdict == "same") verdict = "unchanged";
+        else if(verdict == "same") verdict = "unchanged";
         else if(all_ && verdict == "new") verdict = "empty";
         else { approved_.push_back(unsigned(i)); verdict = "not-tried"; }
         outcomes_[i] = Outcome(slots_[i].mode, verdict, c.detail);
-        if(verdict == "not-tried") {
-            std::string w;
-            if(!c.lights_kept) { // the colours of the GUI are not written when the slot's lighting is kept
-                if(slots_[i].animations) w += "animations,";
-                if(slots_[i].invisible_keys) w += "invisible-keys,";
-                if(slots_[i].many_colours) w += "many-colours,";
-            }
-            if(c.replaces.find("effects") != std::string::npos) w += "replaces-effects,";
-            if(c.replaces.find("unknown") != std::string::npos) w += "replaces-unknown,";
-            if(c.ignored) w += "ignored=" + std::to_string(c.ignored) + ",";
-            if(c.buttons_changed) w += "buttons-changed,";
-            if(c.name_changed && !w.empty()) w += "name-changed-info,";
-            if(!w.empty()) warnings += "mode " + std::to_string(slots_[i].mode) + ":" + w + ";";
-        }
     }
     if(approved_.empty()) { finish(); return; }
     cursor_ = approved_[0];
     if(!all_ && checks_[cursor_].kept) warnings += "recovery-required;";
-    if(!all_ && checks_[cursor_].verdict == "same") warnings += "rewrite-same;";
     if(!all_ && checks_[cursor_].verdict == "new") warnings += "create-new;";
     if(!warnings.empty()) { ask(Confirm, warnings); return; }
     next_save(now_ms);
@@ -295,8 +310,7 @@ void HwSaveFlow::next_save(int64_t now_ms) {
     if(save_cursor_ == approved_.size()) { after_terminal(now_ms); return; }
     if(check_only_) { finish(); return; } // never a save: line in a build where the save is shut
     cursor_ = approved_[save_cursor_]; state_ = Saving; last_progress_ = 0;
-    command(staged_ ? slots_[cursor_].save_line :
-            "mode " + std::to_string(slots_[cursor_].mode) + " hwsave\n", SaveCommand, now_ms);
+    command(slots_[cursor_].save_line, SaveCommand, now_ms);
 }
 
 void HwSaveFlow::choose(uint64_t id, bool accept, int64_t now_ms) {
@@ -351,11 +365,11 @@ void HwSaveFlow::line(const std::string& raw, int64_t now_ms) {
         e.text = "check"; events_.push_back(e);
         return;
     }
-    if(waiting_type_ == "hwsave" && r.verdict == "progress") {
+    if((waiting_type_ == "hwsave" || waiting_type_ == "hwerase") && r.verdict == "progress") {
         if(!r.valid || r.done < last_progress_) { unknown("invalid-progress"); return; }
         if(state_ == WaitingUnknown) return;
         last_progress_ = r.done; deadline_ = now_ms + 30000;
-        Event e; e.kind = Progress; e.mode = r.mode; e.done =
+        Event e; e.kind = Progress; e.mode = r.mode; e.done = erase_ ? std::min(999u, r.done) :
             approved_.empty() ? 0 : std::min(999u, (completed_ * 1000 + r.done) / unsigned(approved_.size()));
         e.text = r.phase; events_.push_back(e);
         return;
@@ -366,17 +380,22 @@ void HwSaveFlow::line(const std::string& raw, int64_t now_ms) {
         if(state_ == WaitingUnknown) { aborted_ = true; finish(); return; }
         if(r.verdict == "error") { outcomes_[cursor_] = Outcome(r.mode, "failed", r.fields["err"]); finish(); return; }
         Check& c = checks_[cursor_]; c.verdict = r.verdict; c.kept = field(r, "kept", "yes");
-        c.replaces = field(r, "replaces") ? r.fields["replaces"] : "";
-        if(field(r, "ignored")) number(r.fields["ignored"], c.ignored); // already validated by parse()
-        c.buttons_changed = field(r, "buttons", "changed");
-        c.name_changed = field(r, "name", "changed");
-        c.bindings_changed = field(r, "bindings", "changed");
-        c.lights_kept = field(r, "lights", "kept");
         c.detail = field(r, "reason") ? r.fields["reason"] : "";
         const size_t at = raw.find(" hwsavecheck ");
         c.text = raw.substr(at + 13);
         if(!c.text.empty() && c.text.back() == '\n') c.text.pop_back();
         ++cursor_; next_check(now_ms);
+        return;
+    }
+    if(waiting_type_ == "hwerase") {
+        // Erased: the slot is read back (empty). Failed: it may be empty or as it was, and is read again. Refused: nothing written
+        Outcome& o = outcomes_[0];
+        o.hwmode_failed = field(r, "hwmode", "failed");
+        if(r.verdict == "ok") { o.verdict = "erased"; wrote_ = true; }
+        else if(r.verdict == "refused") { o.verdict = "not-erased"; o.detail = r.fields["reason"]; }
+        else { o.verdict = "erase-failed"; o.detail = r.fields["err"]; wrote_ = true; }
+        Event e; e.kind = Progress; e.mode = r.mode; e.done = 1000; e.text = "terminal"; events_.push_back(e);
+        after_terminal(now_ms);
         return;
     }
     outcomes_[cursor_].hwmode_failed = field(r, "hwmode", "failed");
@@ -426,7 +445,7 @@ void HwSaveFlow::tick(int64_t now_ms) {
     } else if(waiting_send_ && now_ms >= deadline_) {
         waiting_send_ = false; aborted_ = true;
         if(state_ == Saving && !outcomes_.empty()) {
-            outcomes_[cursor_].verdict = "failed";
+            if(!erase_) outcomes_[cursor_].verdict = "failed";   // (an erase not sent is not tried: nothing reached the daemon)
             outcomes_[cursor_].detail = "send-not-delivered";
         }
         after_terminal(now_ms); // zero bytes delivered: no daemon request is pending
@@ -456,9 +475,9 @@ void HwSaveFlow::refresh_result(bool complete) {
 
 void HwSaveFlow::finish() {
     if(state_ == Done || state_ == Aborting) return;
-    // hwslot1: every transaction that a save did not consume is forgotten, before the summary gives the channel back
+    // hwslot: every transaction that a save did not consume is forgotten, before the summary gives the channel back
     aborts_.clear();
-    if(staged_)
+    if(!erase_)
         for(size_t i = 0; i < slots_.size(); ++i)
             if(outcomes_[i].verdict != "written") aborts_.push_back(i);
     waiting_reply_ = false;

@@ -18,8 +18,18 @@ HwSavePipe::Result KbHwSaveDevice::send(const std::string& line){
 bool KbHwSaveDevice::refresh(unsigned mask, unsigned rgbRequired, std::string& request){
     if(!kb_)
         return false;
-    // The written slots: their read-back replaces the drafts, and is checked against them (hwslot1)
+    // The written slots: their read-back replaces the drafts, and is checked against them (hwslot)
     kb_->k95CommitOnRefresh(mask);
     return kb_->startK95CacheRefresh(mask, rgbRequired, request);
+}
+bool KbHwSaveDevice::refreshAfterErase(unsigned mode, bool erased, std::string& request){
+    if(!kb_ || mode < 1 || mode > 3)
+        return false;
+    // An erased slot is empty: its read-back replaces the draft. Its id may be the one it had (an empty slot erased again), so the
+    // read-back does not have to change it
+    const unsigned mask = 1u << (mode - 1);
+    if(erased)
+        kb_->k95EraseOnRefresh(mask);
+    return kb_->startK95CacheRefresh(mask, 0, request, false);
 }
 void KbHwSaveDevice::invalidateCache(){ if(kb_) kb_->invalidateK95Cache(); }

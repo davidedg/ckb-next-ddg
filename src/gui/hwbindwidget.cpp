@@ -161,11 +161,9 @@ HwBindWidget::HwBindWidget(QWidget* parent) : QWidget(parent), keyWidget(new Key
                            static_cast<QBoxLayout*>(ui->macroRightLayout), static_cast<QBoxLayout*>(ui->textRow)})
         row->setSpacing(spacing);
     ui->macroGrid->setSpacing(spacing);
-    for(QWidget* line : {static_cast<QWidget*>(ui->banner), static_cast<QWidget*>(ui->recreateButton), ui->textDelayBox,
-                         static_cast<QWidget*>(ui->textWhy), static_cast<QWidget*>(ui->flagsLabel),
-                         static_cast<QWidget*>(ui->errorLabel)})
+    for(QWidget* line : {static_cast<QWidget*>(ui->banner), ui->textDelayBox, static_cast<QWidget*>(ui->textWhy),
+                         static_cast<QWidget*>(ui->flagsLabel), static_cast<QWidget*>(ui->textNote), static_cast<QWidget*>(ui->errorLabel)})
         line->hide();
-    connect(ui->recreateButton, &QPushButton::clicked, this, [this](){ emit recreateRequested(!recreateActive); });
 
     keyWidget->setObjectName("deviceKeys");
     keyWidget->rgbMode(false);
@@ -196,6 +194,8 @@ HwBindWidget::HwBindWidget(QWidget* parent) : QWidget(parent), keyWidget(new Key
     connect(ui->remapTabs, &QTabWidget::currentChanged, this, &HwBindWidget::remapTabChanged);
     connect(ui->imitateCheck, &QCheckBox::toggled, this, &HwBindWidget::imitateChanged);
     connect(ui->imitateMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &HwBindWidget::imitateChanged);
+    terminatePalette = ui->terminateSpin->palette();
+    connect(ui->terminateSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &HwBindWidget::terminateChanged);
     for(QPushButton* b : {ui->winButton, ui->ctrlButton, ui->altButton, ui->shiftButton})
         connect(b, &QPushButton::toggled, this, &HwBindWidget::shortcutChanged);
     connect(ui->clearShortcutButton, &QPushButton::clicked, this, &HwBindWidget::clearShortcut);
@@ -266,9 +266,13 @@ HwBindWidget::HwBindWidget(QWidget* parent) : QWidget(parent), keyWidget(new Key
     connect(ui->textEdit, &QPlainTextEdit::textChanged, this, [this](){
         limitText();
         textRebuilt = false;
+        if(type() == TEXT) showMessage(ui->errorLabel, QString());   // (a refusal of Apply is about the text that was there)
         updateTextPreview();
     });
-    connect(ui->textDelay, QOverload<int>::of(&QSpinBox::valueChanged), this, &HwBindWidget::updateTextPreview);
+    connect(ui->textDelay, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](){
+        if(type() == TEXT) showMessage(ui->errorLabel, QString());
+        updateTextPreview();
+    });
 
     connect(ui->typeBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &HwBindWidget::typeChanged);
     connect(ui->applyButton, &QPushButton::clicked, this, [this](){ apply(); });
@@ -539,17 +543,6 @@ void HwBindWidget::setSlot(const HwBinding::Record* newBase, HwSlotDraft::Draft*
     fitKeyboard();
 }
 
-void HwBindWidget::setRecreate(bool offered, bool active){
-    recreateActive = active;
-    ui->recreateButton->setText(active ? tr("Keep the bindings the slot has") : tr("Recreate the bindings from scratch..."));
-    ui->recreateButton->setVisible(offered);
-    updateEnabled();
-}
-
-bool HwBindWidget::recreateOffered() const {
-    return !ui->recreateButton->isHidden();
-}
-
 void HwBindWidget::setControlsEnabled(bool e){
     controls = e;
     updateEnabled();
@@ -602,6 +595,8 @@ void HwBindWidget::typeChanged(int index){
     ui->noticeLabel->clear();
     if(index == TEXT)
         updateTextPreview();
+    else
+        showMessage(ui->textNote, QString());
     updateEnabled();
 }
 
@@ -624,6 +619,9 @@ void HwBindWidget::loadPanel(){
     rows.clear();
     resetRemap();
     RemapTab tab = KEYBOARD_TAB;
+    loadedTextKeys = false;
+    loadedText.clear();
+    loadedStrokes.clear();
     fillText(QString());
     ui->textDelay->setValue(0);
     textRebuilt = false;
@@ -682,22 +680,31 @@ void HwBindWidget::loadPanel(){
     }
     case HwBindEdit::TEXT: {
         t = TEXT;
-        // The text the events type with the layout of the device, rebuilt from them
+        // The string the slot's PROFILE.ZIP keeps (its line ends as the field has them); without one, the text the events type with
+        // the layout of the device, rebuilt from them. The field left as it is keeps the keys of the action (a Text of iCUE never
+        // becomes a Macro unless it is edited)
         std::vector<HwTextShape::Stroke> strokes;
         unsigned ms = 0;
         HwTextShape::recognize(a.events, strokes, ms);
         QString text;
+        if(!a.text.empty())
+            text = QString::fromStdString(a.text).replace("\r\n", "\n").replace('\r', '\n');
+        else {
 #ifdef USE_XKBCOMMON
-        for(const HwTextShape::Stroke& s : strokes){
-            const char32_t c = xkb ? xkb->character(s) : 0;
-            text += c ? QString::fromUcs4(&c, 1) : QString("?");
-        }
+            for(const HwTextShape::Stroke& s : strokes){
+                const char32_t c = xkb ? xkb->character(s) : 0;
+                text += c ? QString::fromUcs4(&c, 1) : QString("?");
+            }
 #else
-        text = QString(int(strokes.size()), QChar('?'));
+            text = QString(int(strokes.size()), QChar('?'));
 #endif
+        }
+        loadedText = text;
+        loadedStrokes = strokes;
+        loadedTextKeys = true;
         fillText(text);
         ui->textDelay->setValue(int(ms));
-        textRebuilt = true;
+        textRebuilt = a.text.empty();
         break;
     }
     case HwBindEdit::KEPT:
@@ -705,7 +712,7 @@ void HwBindWidget::loadPanel(){
         break;
     }
     // A macro whose values iCUE does not write is kept as it was read: it can be replaced, not edited
-    if(a.kind == Action::MACRO && !HwBindEdit::icueValues(a.subtype, a.start, a.run, a.repeat))
+    if(a.kind == Action::MACRO && !HwBindEdit::canonicalValues(a.subtype, a.start, a.run, a.repeat))
         t = KEPT;
     ui->keptLabel->setText(a.kind == Action::MACRO ?
         tr("A macro kept as the slot has it (subtype %1, start %2, run %3, repeat %4, %5 events): it can be replaced, not edited.")
@@ -716,7 +723,7 @@ void HwBindWidget::loadPanel(){
     const Action* b = baseAction(index);
     if(b && count == 1){
         QStringList flags;
-        if(b->flags & HwBinding::NON_ICUE) flags << tr("not in the form iCUE writes");
+        if(b->flags & HwBinding::NONCANONICAL) flags << tr("not in the form iCUE writes");
         if(b->flags & HwBinding::SHARED) flags << tr("its file is shared with other keys");
         if(b->flags & HwBinding::LOCKED) flags << tr("values iCUE does not offer: kept as read");
         if(!flags.isEmpty()) showMessage(ui->flagsLabel, tr("In the slot: %1.").arg(flags.join(", ")));
@@ -735,6 +742,8 @@ void HwBindWidget::loadPanel(){
     ui->textDelayBox->setVisible(t == TEXT);
     if(t == TEXT)
         updateTextPreview();
+    else
+        showMessage(ui->textNote, QString());
     updateEnabled();
 }
 
@@ -768,7 +777,6 @@ void HwBindWidget::updateEnabled(){
     ui->pages->widget(TEXT)->setEnabled(selected && xkb);
     ui->textDelayBox->setEnabled(selected && xkb);
     ui->applyButton->setEnabled(selected && type() != KEPT);
-    ui->recreateButton->setEnabled(controls);
     ui->resetButton->setEnabled(selected && base);
     ui->copyButton->setEnabled(on);
     updateMacroActions();
@@ -975,7 +983,7 @@ void HwBindWidget::placePicker(){
     pickerWidget->setPickMode(true, shortcut);
     QStringList dimmed;
     for(unsigned k = 0; k < K95PKeyTable::KEYS; ++k)
-        if(K95PKeyTable::icueMedia(k) && (shortcut || ui->imitateCheck->isChecked()))
+        if(K95PKeyTable::mediaKey(k) && (shortcut || ui->imitateCheck->isChecked()))
             dimmed << QString::fromStdString(K95PKeyTable::label(k));
     if(shortcut)
         for(const char* m : MODIFIER_KEYS) dimmed << m;
@@ -1018,7 +1026,7 @@ bool HwBindWidget::pickKey(const QString& key){
 
 void HwBindWidget::imitateChanged(){
     // 'Imitate holding key' is not offered on a media key; its time only On press
-    const bool media = keyboardPick >= 0 && K95PKeyTable::icueMedia(unsigned(keyboardPick));
+    const bool media = keyboardPick >= 0 && K95PKeyTable::mediaKey(unsigned(keyboardPick));
     if(media && ui->imitateCheck->isChecked()){
         const QSignalBlocker block(ui->imitateCheck);
         ui->imitateCheck->setChecked(false);
@@ -1034,9 +1042,24 @@ void HwBindWidget::imitateChanged(){
         QStringList dimmed;
         if(on)
             for(unsigned k = 0; k < K95PKeyTable::KEYS; ++k)
-                if(K95PKeyTable::icueMedia(k)) dimmed << QString::fromStdString(K95PKeyTable::label(k));
+                if(K95PKeyTable::mediaKey(k)) dimmed << QString::fromStdString(K95PKeyTable::label(k));
         if(dimmed != pickerWidget->dimmedKeys()) pickerWidget->setDimmedKeys(dimmed);
     }
+}
+
+void HwBindWidget::terminateChanged(){
+    // Past what the keyboard waits (16 777.2 s): red, and why; iCUE takes up to 99 999 s, and writes the same
+    const bool over = std::lround(ui->terminateSpin->value() * 10.) > long(HwBindEdit::IMITATE_MAX_MS / 100);
+    QPalette p = terminatePalette;
+    if(over)
+        p.setColor(QPalette::Text, QColor(255, 0, 0));
+    ui->terminateSpin->setPalette(p);
+    QLocale here = ui->terminateSpin->locale();
+    here.setNumberOptions(here.numberOptions() | QLocale::OmitGroupSeparator);
+    ui->terminateSpin->setToolTip(over ? tr("The keyboard waits at most %1 s, and releases the key then (iCUE accepts up to %2 s, and "
+                                            "writes the same).").arg(here.toString(HwBindEdit::IMITATE_MAX_MS / 1000., 'f', 1))
+                                                                .arg(here.toString(HwBindEdit::IMITATE_ARCHIVE_MAX_MS / 1000))
+                                       : QString());
 }
 
 void HwBindWidget::setImitate(bool on, bool toggle, double seconds){
@@ -1116,7 +1139,7 @@ void HwBindWidget::setRemap(const QString& key){
         ui->mouseGroup->button(i)->setChecked(true);
         return;
     }
-    if(i >= 0 && unsigned(i) < K95PKeyTable::KEYS && K95PKeyTable::icueLanguage(unsigned(i))){
+    if(i >= 0 && unsigned(i) < K95PKeyTable::KEYS && K95PKeyTable::languageKey(unsigned(i))){
         setRemapTab(LANGUAGE_TAB);
         ui->languageBox->setCurrentIndex(ui->languageBox->findData(i));
         return;
@@ -1184,6 +1207,40 @@ QString HwBindWidget::notice() const {
     return ui->noticeLabel->text();
 }
 
+QString HwBindWidget::textNote() const {
+    return ui->textNote->isHidden() ? QString() : ui->textNote->text();
+}
+
+std::vector<HwTextShape::Stroke> HwBindWidget::textStrokes(const QString& field, std::u32string& rejected, std::u32string& notOnWindows,
+                                                          QStringList& differing) const {
+    // The keys of a Text: the action's own while the field has the text it was filled with, else those of the layout of the device.
+    // differing: the characters the layout types with other keys than iCUE's US table does (or that iCUE leaves out), each once in
+    // quotes: with any, the Text is saved as a Macro, which types the keys of the layout
+    rejected.clear();
+    notOnWindows.clear();
+    differing.clear();
+    if(loadedTextKeys && field == loadedText)
+        return loadedStrokes;
+    std::vector<HwTextShape::Stroke> out;
+#ifdef USE_XKBCOMMON
+    std::u32string text;
+    if(!xkb || !HwTextShape::utf32(field.toStdString(), text))
+        return out;
+    out = xkb->strokes(text, &rejected, &notOnWindows);
+    for(char32_t c : text){
+        std::u32string none;
+        const std::vector<HwTextShape::Stroke> mine = xkb->strokes(std::u32string(1, c), &none, &none);
+        HwTextShape::Stroke us;
+        if(mine.empty() || (mine.size() == 1 && HwTextShape::canonicalUsStroke(c, us) && mine[0] == us))
+            continue;   // (a character no key makes is refused, and said so)
+        const QString quoted = "\"" + QString::fromUcs4(&c, 1) + "\"";
+        if(!differing.contains(quoted))
+            differing << quoted;
+    }
+#endif
+    return out;
+}
+
 QString HwBindWidget::textRefusal(const std::u32string& rejected, const std::u32string& notOnWindows) const {
     // What a Text cannot type: no key of the layout makes it, or only a key that Windows does not give it to
     QStringList why;
@@ -1197,21 +1254,27 @@ QString HwBindWidget::textRefusal(const std::u32string& rejected, const std::u32
 }
 
 void HwBindWidget::updateTextPreview(){
-    // The count of events and the layout, next to Apply like the notices of the Macro page
+    // The count of events and the layout, next to Apply like the notices of the Macro page; under the field, while it is typed,
+    // whether it is saved as a Macro and why
     textPreviewText.clear();
+    QString note;
 #ifdef USE_XKBCOMMON
     if(xkb){
-        std::u32string text, rejected, notOnWindows;
-        HwTextShape::utf32(ui->textEdit->toPlainText().toStdString(), text);
-        const std::vector<HwTextShape::Stroke> strokes = xkb->strokes(text, &rejected, &notOnWindows);
+        std::u32string rejected, notOnWindows;
+        QStringList differing;
+        const std::vector<HwTextShape::Stroke> strokes = textStrokes(ui->textEdit->toPlainText(), rejected, notOnWindows, differing);
         textPreviewText = tr("%1 events (layout: %2).").arg(HwTextShape::events(strokes, unsigned(ui->textDelay->value())).size())
                                                        .arg(layoutName);
         const QString refusal = textRefusal(rejected, notOnWindows);
-        if(!refusal.isEmpty()) textPreviewText += " " + refusal;
+        if(!refusal.isEmpty())
+            textPreviewText += " " + refusal;
+        else if(!differing.isEmpty())
+            note = tr("Saved as a Macro: iCUE types %1 with other keys than the %2 layout does.").arg(differing.join(", ")).arg(layoutName);
     }
 #endif
     if(type() != TEXT)
         return;
+    showMessage(ui->textNote, ui->errorLabel->isHidden() ? note : QString());   // (a refusal of Apply goes in its place)
     ui->noticeLabel->setText(textRebuilt && !textPreviewText.isEmpty() ?
                          textPreviewText + " " + tr("Rebuilt from the events of the key.") : textPreviewText);
 }
@@ -1276,6 +1339,7 @@ void HwBindWidget::recordedEvent(const QString& key, qint64 us, bool down){
 
 void HwBindWidget::fail(const QString& why){
     showMessage(ui->errorLabel, why);
+    showMessage(ui->textNote, QString());
 }
 
 bool HwBindWidget::build(Action& out){
@@ -1325,18 +1389,37 @@ bool HwBindWidget::build(Action& out){
 #ifdef USE_XKBCOMMON
         if(!xkb){ fail(ui->textWhy->text()); return false; }
         std::u32string text, rejected, notOnWindows;
-        if(!HwTextShape::utf32(ui->textEdit->toPlainText().toStdString(), text) || text.empty()){ fail(tr("Type the text.")); return false; }
-        const std::vector<HwTextShape::Stroke> strokes = xkb->strokes(text, &rejected, &notOnWindows);
+        QStringList differing;
+        const QString field = ui->textEdit->toPlainText();
+        if(!HwTextShape::utf32(field.toStdString(), text) || text.empty()){ fail(tr("Type the text.")); return false; }
+        const std::vector<HwTextShape::Stroke> strokes = textStrokes(field, rejected, notOnWindows, differing);
         if(!rejected.empty() || !notOnWindows.empty()){
             fail(textRefusal(rejected, notOnWindows));
             return false;
         }
-        const std::vector<HwBinding::Event> ev = HwTextShape::events(strokes, unsigned(ui->textDelay->value()));
-        if(ev.size() > HwBindEdit::EVENTS_MAX){
-            fail(tr("The text needs %1 key events, at most %2 fit in one hardware action: shorten it.").arg(ev.size()).arg(HwBindEdit::EVENTS_MAX));
+        const unsigned delay = unsigned(ui->textDelay->value());
+        const std::vector<HwBinding::Event> ev = HwTextShape::events(strokes, delay);
+        if(differing.isEmpty()){
+            // iCUE would type the same keys: a Text (subtype 3), which iCUE shows as one
+            if(ev.size() > HwBindEdit::EVENTS_MAX){
+                fail(tr("The text needs %1 key events, at most %2 fit in one hardware action: shorten it.").arg(ev.size()).arg(HwBindEdit::EVENTS_MAX));
+                return false;
+            }
+            out = HwBindEdit::text(ev);
+            return true;
+        }
+        // Else a Macro of the same events (one row each), within what iCUE's editor takes for one: the rows first
+        if(ev.size() > HwBindEdit::MACRO_ROWS_MAX){
+            fail(tr("Cannot be saved: as a Macro this text has %1 rows, and a Macro has at most %2 (as in iCUE's editor).")
+                     .arg(ev.size()).arg(HwBindEdit::MACRO_ROWS_MAX));
             return false;
         }
-        out = HwBindEdit::text(ev);
+        if(strokes.size() > 1 && delay > HwBindEdit::MACRO_DELAY_MAX){
+            fail(tr("Cannot be saved: as a Macro, the delay between characters can be at most %1 ms (as in iCUE's editor).")
+                     .arg(HwBindEdit::MACRO_DELAY_MAX));
+            return false;
+        }
+        out = HwBindEdit::macro(ev, HwBindEdit::START_PRESS, HwBindEdit::RUN_ONCE);
         return true;
 #else
         fail(ui->textWhy->text());
@@ -1355,8 +1438,11 @@ bool HwBindWidget::apply(){
     if(!editable || !controls || isRecording || currentSelection.isEmpty())
         return false;
     Action a;
-    if(!build(a))
+    if(!build(a)){
+        if(type() == TEXT)
+            updateTextPreview();   // (the count of the events stays next to Apply, under the refusal)
         return false;
+    }
     // What was a Text and is now a Macro made by hand: it is saved as a Macro
     bool wasText = false;
     const HwBinding::Keys before = draft->keys;
@@ -1374,6 +1460,8 @@ bool HwBindWidget::apply(){
     if(!HwBindEdit::check(draft->keys, baseKeys, why)){
         draft->keys = before;
         fail(QString::fromStdString(why));
+        if(type() == TEXT)
+            updateTextPreview();
         return false;
     }
     refreshKeys();

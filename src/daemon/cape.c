@@ -88,7 +88,8 @@ int cape_pkt_allowed(const uint8_t* p){
         case 0x01: case 0x04: case 0x0d:
             return p[3] == 0x00 && tail_zero(p, 4);
         case 0x03:
-            return p[3] == 0x01 && tail_zero(p, 4);
+            // 01: the size of the open file; 00: the total of the files of the selected slot
+            return p[3] <= 0x01 && tail_zero(p, 4);
         default:
             return 0;
         }
@@ -308,13 +309,13 @@ static int wait_status(cape_session* s, int allow_notfound){
 }
 
 // The slot table is well formed if every entry is either all zeros (empty slot) or has a GUID and the
-// trailing "00 01" that every entry seen so far has.
+// trailing flag 01 that every entry seen so far has (after the cookie, 24 bits).
 static int slot_table_ok(const cape_slotid* slots){
     for(size_t i = 0; i < CAPE_SLOTS; i++){
         if(cape_slotid_is_empty(&slots[i])){
-            if(slots[i].cookie || slots[i].flags[0] || slots[i].flags[1])
+            if(slots[i].cookie || slots[i].flag)
                 return 0;
-        } else if(slots[i].flags[0] != 0x00 || slots[i].flags[1] != 0x01){
+        } else if(slots[i].flag != CAPE_SLOTID_FLAG){
             return 0;
         }
     }
@@ -347,6 +348,7 @@ int cape_session_open(cape_session* s, const cape_io* io){
     // the identity, not because this line is reachable with a mismatched or short reply -- both are excluded above.
     if(cape_fwinfo_from_ident(reply, sizeof(reply), &s->fw) != CAPE_OK)
         return fail(s, CAPE_E_PROTO);
+    s->layout = reply[23] + 1;
     if(!cape_fw_is_tested(&s->fw)){
         s->state = CAPE_S_REFUSED;
         return CAPE_E_FW;
@@ -468,6 +470,33 @@ int cape_read_file(cape_session* s, unsigned slot, const char* name, uint8_t* bu
         return fail(s, rc);
     *len = size;
     cape_session_progress_step(s);
+    return CAPE_OK;
+}
+
+int cape_slot_bytes(cape_session* s, unsigned slot, uint32_t* bytes){
+    if(!s || !bytes)
+        return CAPE_E_ARG;
+    *bytes = 0;
+    if(s->state == CAPE_S_REFUSED)
+        return CAPE_E_FW;
+    if(s->state != CAPE_S_READY)
+        return CAPE_E_BROKEN;
+    if(slot >= CAPE_SLOTS)
+        return CAPE_E_RANGE;
+    uint8_t pkt[CAPE_PKT_SIZE], reply[CAPE_PKT_SIZE];
+    int rc;
+    if(s->slot != (int)slot){
+        pkt_init(pkt, 0x07, 0x17, 0x0c, (uint8_t)slot);
+        rc = cape_tx(s, pkt);
+        if(rc)
+            return fail(s, rc);
+        s->slot = (int)slot;
+    }
+    pkt_init(pkt, 0x0e, 0x17, 0x03, 0x00);
+    rc = txrx_matching(s, pkt, reply);
+    if(rc)
+        return fail(s, rc);
+    *bytes = rd32(reply + 4);
     return CAPE_OK;
 }
 

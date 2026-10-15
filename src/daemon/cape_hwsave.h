@@ -2,24 +2,16 @@
 #define CAPE_HWSAVE_H
 
 /*
- * hwsave of the Corsair K95 RGB Platinum (USB 1b1c:1b2d): the colours of a hardware mode of the GUI to a slot of the keyboard, and
- * the check that says what a save would do. The daemon's commands are thin wrappers around this, so that everything that matters
- * can be tested against the simulated keyboard: what is read, what is planned, what is sent, what is kept when a save goes wrong.
+ * K95 RGB Platinum slot validation and writing, shared with offline simulated-device tests.
+ * The staged GUI path calls cape_hwsave_prepare() at Check and retains the resulting base, plan and exact files.
+ * A repeated Check returns that frozen result without USB. cape_hwsave_save_prepared() verifies the slot identity,
+ * writes those files and verifies them byte for byte, retaining the prepared transaction after an error for explicit Retry.
+ * Successful readback constructs the cache image from the verified files without reading them again.
+ * Nothing here automatically repeats a write; the first failure ends the attempt and is reported.
  *
- * A check reads the slot (or takes the snapshot below) and plans; it sends nothing that changes the keyboard, and it is for the
- * questions "is this slot empty, unchanged, refused, and what would a save remove?" that the GUI asks before it offers a save.
- *
- * A save is: the slot read whole, the plan (cape_slot.h), the write and the reading back (cape_write.h), all in one session, and afterwards the slot as the daemon keeps it
- * (cape_hwslot), worked out from the files that were written and read back, without another read. Nothing is retried here or
- * below: the first failure ends it and is reported.
- *
- * The snapshot. A save begins by emptying the slot: if it fails after that, what the slot held (the remaps, the macros, the
- * indicator colours) is no longer on the keyboard, and a save read again would find an empty slot and write a profile without
- * them. So the slot as it was read is kept, in memory, for the next save of that slot: whether the user asks for the same save
- * again (Retry) or changes the picture first, the files that are kept come from the snapshot. A slot that was empty is kept as
- * empty (a save that fails leaves it with its identity and without its files, which a read would refuse). It is dropped when a save of that
- * slot succeeds, when the daemon reads the keyboard again (cape_hwsave_state_drop) and when the daemon is done with the keyboard.
- * The user is told, by the caller, that the macros and remaps of a slot that failed can be lost if the daemon goes away first.
+ * The standalone check/run helpers also retain the original slot image after a destructive failure. Their state owns
+ * these snapshots until success, explicit drop or destruction. Staged transactions own their prepared files separately;
+ * the caller releases them on Abort, owner close, detach, Erase or successful Save.
  */
 
 #include "cape.h"
@@ -53,6 +45,28 @@ typedef struct {
     unsigned packets;            // packets of the session in all
 } cape_hwsave_result;
 
+// The immutable result of Check, owned by the transaction until Abort or success.
+typedef struct {
+    int valid;
+    int recovery;                    // our previous attempt may have cleared or partly written this slot
+    cape_slot_image base;
+    cape_slot_plan plan;
+    cape_slot_files files;
+} cape_hwsave_prepared;
+
+static inline void cape_hwsave_prepared_free(cape_hwsave_prepared* p){
+    if(!p) return;
+    cape_slot_image_free(&p->base);
+    cape_slot_files_free(&p->files);
+    p->valid = p->recovery = 0;
+}
+
+// Free or zero-initialize prepared before the first call. Only WRITE/NEW produces a valid prepared plan.
+int cape_hwsave_prepare(cape_hwsave_state* st, const cape_io* io, unsigned slot, const cape_slot_edit* edit,
+                       cape_hwsave_result* out, cape_hwsave_prepared* prepared);
+int cape_hwsave_save_prepared(cape_hwsave_state* st, const cape_io* io, unsigned slot, cape_hwsave_prepared* prepared,
+                             cape_hwsave_result* out, cape_slot_image* image);
+
 // The check of a slot: reads it (or takes the snapshot) and plans. io must be a way to the
 // keyboard through which every packet is tried once and read commands may be repeated; the daemon binds it as it does for hwload.
 // Returns CAPE_OK, also for a refusal (see the result), or the error that ended the session.
@@ -68,5 +82,12 @@ int cape_hwsave_run(cape_hwsave_state* st, const cape_io* io, unsigned slot, con
 // caller's to free; it is left empty (present = 0) when the save did not end so.
 int cape_hwsave_run_ex(cape_hwsave_state* st, const cape_io* io, unsigned slot, const cape_slot_edit* edit,
                        cape_hwsave_result* out, cape_slot_image* image);
+
+// The erase of a slot (cape_erase_slot), in a write session for this slot only, if its entry of the slot table is still base (the
+// slot as the user saw it): else plan.verdict is REFUSED (reason says why) and nothing is written; else WRITE, and wrote is 1, also
+// for an empty slot (an erase that stopped between the clear and the marker leaves the table empty and the files there until the
+// marker: the same sequence again ends it). Erased (or failed after the clear), the snapshot of the slot is dropped. After a success result->slot is an empty slot (slot_ok). io as for cape_hwsave_run(). Returns CAPE_OK (also for a
+// refusal) or the error that stopped it (also in result->err; result->write says where).
+int cape_hwsave_erase(cape_hwsave_state* st, const cape_io* io, unsigned slot, const cape_slotid* base, cape_hwsave_result* out);
 
 #endif  // CAPE_HWSAVE_H

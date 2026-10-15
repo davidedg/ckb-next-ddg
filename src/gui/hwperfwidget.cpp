@@ -23,7 +23,6 @@ HwPerfWidget::HwPerfWidget(QWidget* parent) : QWidget(parent), ui(new Ui::HwPerf
     options[1] = ui->altF4Box;
     options[2] = ui->shiftTabBox;
     options[3] = ui->winKeyBox;
-    note = ui->unknownNote;
     copy = ui->copyButton;
     restore = ui->restoreButton;
 
@@ -56,18 +55,16 @@ QCheckBox* HwPerfWidget::option(uint8_t bit) const {
 
 void HwPerfWidget::setPerf(const HwSlotDraft::Perf& perf){
     filling = true;
-    winlock = perf.winlock;
     for(int n = 0; n < 4; ++n){
         colours[n]->color(colourAt(perf.indicators, n));
         options[n]->setChecked(perf.winlock & OPTION_BITS[n]);
     }
     filling = false;
-    showNote();
 }
 
 HwSlotDraft::Perf HwPerfWidget::perf() const {
     HwSlotDraft::Perf p;
-    p.winlock = winlock & 0xf0;   // the bits iCUE never writes, as they are
+    p.winlock = 0;   // (the bits iCUE never writes, 4 to 7, are not saved: none)
     for(int n = 0; n < 4; ++n)
         if(options[n]->isChecked())
             p.winlock |= OPTION_BITS[n];
@@ -95,10 +92,5 @@ void HwPerfWidget::setCopyEnabled(bool enabled){
 void HwPerfWidget::changed(){
     if(filling)
         return;
-    const HwSlotDraft::Perf p = perf();   // (bits 4..7 of winlock, the ones the note is about, do not change here)
-    emit perfChanged(p);
-}
-
-void HwPerfWidget::showNote(){
-    note->setVisible(winlock & 0xf0);
+    emit perfChanged(perf());
 }

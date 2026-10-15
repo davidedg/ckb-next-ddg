@@ -12,10 +12,11 @@
 #include <stdint.h>
 
 #define CAPE_SLOT_NAME        12    // a file name and its terminator
-// The most files of a slot this module handles: PROFILE.I, .DAT, .MAP, the macro files, and the lighting (CAPE_LIGHT_FILES_MAX)
+// The most files of a slot this module handles: PROFILE.I, .DAT, .MAP, .ZIP (iCUE's copy of the profile), the macro files, and the
+// lighting (CAPE_LIGHT_FILES_MAX)
 // One macro file per key at most (152 keys, CAPE_BIND_K95_KEYS): a slot of iCUE with a macro on every key can be read and kept
 #define CAPE_SLOT_MACROS_MAX  152
-#define CAPE_SLOT_FILES_MAX   (3 + CAPE_SLOT_MACROS_MAX + CAPE_LIGHT_FILES_MAX)
+#define CAPE_SLOT_FILES_MAX   (4 + CAPE_SLOT_MACROS_MAX + CAPE_LIGHT_FILES_MAX)
 
 typedef struct {
     char name[CAPE_SLOT_NAME];

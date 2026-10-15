@@ -20,7 +20,7 @@ KeyMap k95p(const KeyMap& device){
     for(const QString& name : m.keys()){
         Key& k = m[name];
         const int i = K95PKeyTable::indexOf(name.toStdString());
-        if(!k.hasScan || i < 0 || unsigned(i) >= K95PKeyTable::KEYS || !(K95PKeyTable::icueKeyboard(unsigned(i)) || K95PKeyTable::icueMedia(unsigned(i)))){
+        if(!k.hasScan || i < 0 || unsigned(i) >= K95PKeyTable::KEYS || !(K95PKeyTable::keyboardKey(unsigned(i)) || K95PKeyTable::mediaKey(unsigned(i)))){
             k.hasScan = false;
             k.hasLed = false;
             continue;

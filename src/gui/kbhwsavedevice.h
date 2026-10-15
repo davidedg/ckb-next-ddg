@@ -14,6 +14,7 @@ public:
     void end() override;
     HwSavePipe::Result send(const std::string& line) override;
     bool refresh(unsigned mask, unsigned rgbRequired, std::string& request) override;
+    bool refreshAfterErase(unsigned mode, bool erased, std::string& request) override;
     void invalidateCache() override;
 private:
     QPointer<Kb> kb_;

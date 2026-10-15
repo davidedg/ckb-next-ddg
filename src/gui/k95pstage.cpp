@@ -1,22 +1,9 @@
 #include "k95pstage.h"
 
-#include "k95pledmap.h"
-#include "k95psnapshot.h"
-
-#include <array>
 #include <cstdio>
 
-namespace {
-int ledForName(const QString& name){
-    for(size_t i = 0; i < K95PLedMap::count; ++i)
-        if(name == QLatin1String(K95PLedMap::entries[i].name))
-            return K95PLedMap::entries[i].led;
-    return -1;
-}
-}
-
-bool makeK95PStage(const KeyMap& map, const QColorMap& colours, const QString& name, const QString& baseName,
-                   bool lightsChanged, const HwBinding::Record& base, const HwSlotDraft::Draft& draft,
+bool makeK95PStage(const KeyMap& map, const QString& name, const QString& baseName,
+                   const HwBinding::Record& base, const HwSlotDraft::Draft& draft,
                    unsigned mode, unsigned owner, uint32_t txn, K95PStage& out, std::string& error){
     error.clear();
     K95PStage result;
@@ -44,50 +31,27 @@ bool makeK95PStage(const KeyMap& map, const QColorMap& colours, const QString& n
         s.name.assign(utf8.constData(), size_t(utf8.size()));
     }
 
-    // The performance settings: wl: and ind: when the draft's are not the slot's
-    const HwSlotDraft::Perf want = HwSlotDraft::effectivePerf(draft, &base);
+    // The performance settings: wl: and ind: when the draft's are not the slot's. Bits 4 to 7 of the Win Lock options have no place
+    // in iCUE's model, which the slot's PROFILE.ZIP holds: they are never written (imported values may have them)
+    HwSlotDraft::Perf want = HwSlotDraft::effectivePerf(draft, &base);
+    want.winlock &= 0x0f;
     const HwSlotDraft::Perf have = HwSlotDraft::basePerf(&base);
     s.hasWinlock = want.winlock != have.winlock;
     s.winlock = want.winlock;
     s.hasIndicators = want.indicators != have.indicators;
     s.indicators = want.indicators;
 
-    // The lighting: static layers of the mode's colours when they changed, or when they replace the slot's effects
-    const bool image = base.light == HwBinding::Record::STATIC || base.light == HwBinding::Record::NONE;
-    result.pic = image ? lightsChanged : draft.replaceLights;
-    s.keepLight = !result.pic;
-    if(result.pic){
-        K95PSnapshot snap;
-        if(!makeK95PSnapshot(map, colours, name, mode, snap, error))
-            return false;
-        // One name per LED (two names may be one LED): the one whose colour the picture has, as makeK95PSnapshot takes it
-        std::array<QString, 256> ledName;
-        QStringList names = map.keys();
-        names.sort(Qt::CaseSensitive);
-        for(const QString& keyName : names){
-            const int led = ledForName(keyName);
-            if(map.key(keyName).hasLed && led >= 0 && led < int(ledName.size()))
-                ledName[size_t(led)] = keyName;
-        }
-        // The three indicator buttons are not the mode's to paint: they have the colours of the performance settings (the Win Lock
-        // button at rest, its lock off colour), by LED, whatever name the keymap gives it (logo and profswitch are one LED)
-        const struct { size_t led; size_t at; } buttons[] = { { 0x7d, 0 }, { 0x89, 3 }, { 0x08, 9 } };
-        for(const auto& b : buttons)
-            snap.ledRgb[b.led] = uint32_t(want.indicators[b.at]) << 16 | uint32_t(want.indicators[b.at + 1]) << 8 | want.indicators[b.at + 2];
-        for(size_t led = 0; led < snap.ledRgb.size(); ++led)
-            if(snap.ledRgb[led] && !ledName[led].isEmpty())
-                s.rgb[ledName[led].toStdString()] = snap.ledRgb[led];
-        result.colours = snap.colours;
-        result.invisibleKeys = snap.invisibleKeys;
-        result.rgbRequired = !snap.allBlack;
-    } else
-        result.rgbRequired = base.light == HwBinding::Record::STATIC && base.layers > 0;
+    s.keepLight = HwLighting::same(draft.lighting, base.lighting);
+    if(!s.keepLight){
+        if(!draft.lighting.data().known){ error = "the lighting model is unknown"; return false; }
+        s.lighting = draft.lighting;
+    }
 
-    // The bindings: the draft's when they are not the slot's; a slot whose bindings are not a model keeps them unless recreated
-    if(base.state == HwBinding::Record::RAW || base.state == HwBinding::Record::BROKEN){
-        s.keepBindings = !draft.recreate;
-        s.recreate = draft.recreate;
-    } else {
+    // The bindings: the draft's when they are not the slot's. A slot that cannot be rewritten has none known: it keeps its own (the
+    // check refuses it, and says why)
+    if(base.state == HwBinding::Record::READONLY)
+        s.keepBindings = true;
+    else {
         if(!draft.hasBindings){ error = "the slot's bindings were not read"; return false; }
         s.keepBindings = HwBinding::sameBindings(draft.keys, base.keys);
     }

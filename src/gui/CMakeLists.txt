@@ -153,6 +153,15 @@ if (MACOS OR LINUX)
               k95psnapshot.cpp
               k95pstage.cpp
               hwbinding.cpp
+              hwlightingmodel.cpp
+              hwlightwidget.cpp
+              hwlightwidget.h
+              ../daemon/cape_names.c
+              ../daemon/cape_profile.c
+              ../daemon/cape_xml.c
+              ../daemon/cape_format.c
+              ../daemon/cape_lightmodel.c
+              ../daemon/cape_hwslot.c
               hwslotdraft.cpp
               hwbindedit.cpp
               hwbindwidget.cpp
@@ -759,7 +768,8 @@ target_compile_options(
     ckb-next
         PRIVATE
           "${CKB_NEXT_COMMON_COMPILE_FLAGS}"
-          "${CKB_NEXT_EXTRA_CXX_FLAGS}")
+          "$<$<COMPILE_LANGUAGE:C>:${CKB_NEXT_EXTRA_C_FLAGS}>"
+          "$<$<COMPILE_LANGUAGE:CXX>:${CKB_NEXT_EXTRA_CXX_FLAGS}>")
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(

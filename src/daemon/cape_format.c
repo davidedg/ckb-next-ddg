@@ -296,8 +296,7 @@ int cape_info_parse(const uint8_t* buf, size_t len, cape_info* out){
     if(len != CAPE_INFO_SIZE)
         return CAPE_E_SIZE;
     memcpy(out->guid, buf + 2, 16);
-    out->cookie = rd16(buf + 18);
-    memcpy(out->pad, buf + 20, 2);
+    out->cookie = rd32(buf + 18);
     memcpy(out->name_area, buf + 22, CAPE_INFO_NAME_AREA);
     memcpy(out->tail, buf + 22 + CAPE_INFO_NAME_AREA, CAPE_INFO_TAIL_SIZE);
     return CAPE_OK;
@@ -311,8 +310,7 @@ int cape_info_build(const cape_info* in, uint8_t* out, size_t cap){
     out[0] = 0x49;
     out[1] = 0x00;
     memcpy(out + 2, in->guid, 16);
-    wr16(out + 18, in->cookie);
-    memcpy(out + 20, in->pad, 2);
+    wr32(out + 18, in->cookie);
     memcpy(out + 22, in->name_area, CAPE_INFO_NAME_AREA);
     memcpy(out + 22 + CAPE_INFO_NAME_AREA, in->tail, CAPE_INFO_TAIL_SIZE);
     return CAPE_INFO_SIZE;
@@ -358,8 +356,8 @@ int cape_info_set_name(cape_info* info, const uint16_t* name, size_t units){
 
 static void slotid_read(const uint8_t* p, cape_slotid* out){
     memcpy(out->guid, p, 16);
-    out->cookie = rd16(p + 16);
-    memcpy(out->flags, p + 18, 2);
+    out->cookie = (uint32_t)p[16] | (uint32_t)p[17] << 8 | (uint32_t)p[18] << 16;
+    out->flag = p[19];
 }
 
 int cape_slotid_parse(const uint8_t* buf, size_t len, cape_slotid* out){
@@ -377,9 +375,15 @@ int cape_slotid_build(const cape_slotid* in, uint8_t* out, size_t cap){
     if(cap < CAPE_SLOTID_SIZE)
         return CAPE_E_CAP;
     memcpy(out, in->guid, 16);
-    wr16(out + 16, in->cookie);
-    memcpy(out + 18, in->flags, 2);
+    out[16] = (uint8_t)(in->cookie & 0xff);
+    out[17] = (uint8_t)((in->cookie >> 8) & 0xff);
+    out[18] = (uint8_t)((in->cookie >> 16) & 0xff);
+    out[19] = in->flag;
     return CAPE_SLOTID_SIZE;
+}
+
+uint32_t cape_cookie_next(uint32_t c){
+    return c >= CAPE_COOKIE_MAX ? 0 : c + 1;
 }
 
 int cape_slotid_is_empty(const cape_slotid* id){

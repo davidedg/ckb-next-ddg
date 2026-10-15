@@ -84,30 +84,37 @@ bool valid_dst(uint32_t d){
     return d < KEYS || (d >= 0xc8 && d <= 0xcc);
 }
 
-bool name_words(const std::vector<std::string>& w, size_t& i, const char* prefix, std::string& name, std::string& err){
-    // prefix:<i>/<n>:<text>, i = 1..n in order
+// prefix<i>/<n>:<text>, i = 1..n in order, n at most maxWords: the text, UTF-8
+bool text_words(const std::vector<std::string>& w, size_t& i, const std::string& prefix, unsigned long maxWords, std::string& text,
+                std::string& err){
     unsigned long total = 0;
     std::string bytes;
     for(unsigned long want = 1;; ++want){
-        if(i >= w.size() || !starts(w[i], prefix)){ err = "the name is not all there"; return false; }
-        const std::vector<std::string> f = split(w[i].substr(std::char_traits<char>::length(prefix)), ':', 2);
+        if(i >= w.size() || w[i].compare(0, prefix.size(), prefix) != 0){ err = "a text is not all there"; return false; }
+        const std::vector<std::string> f = split(w[i].substr(prefix.size()), ':', 2);
         const std::vector<std::string> in = f.size() == 2 ? split(f[0], '/', 2) : std::vector<std::string>();
         unsigned long idx, n;
-        if(in.size() != 2 || !dec(in[0], NAME_WORDS, idx) || !dec(in[1], NAME_WORDS, n) || idx != want || (total && n != total)
+        if(in.size() != 2 || !dec(in[0], maxWords, idx) || !dec(in[1], maxWords, n) || idx != want || (total && n != total)
            || f[1].size() > TEXT_MAX){
-            err = "a malformed name word";
+            err = "a malformed text word";
             return false;
         }
         total = n;
         std::string piece;
-        if(!decode(f[1], piece)){ err = "a name that is not percent-encoded as it should be"; return false; }
+        if(!decode(f[1], piece)){ err = "a text that is not percent-encoded as it should be"; return false; }
         bytes += piece;
         ++i;
         if(idx == total) break;
     }
+    if(!validUtf8(bytes)){ err = "a text that is not UTF-8"; return false; }
+    text = bytes;
+    return true;
+}
+
+bool name_words(const std::vector<std::string>& w, size_t& i, const char* prefix, std::string& name, std::string& err){
     size_t units = 0;
-    if(!validUtf8(bytes, &units) || units > NAME_UNITS){ err = "a name that is not UTF-8, or too long"; return false; }
-    name = bytes;
+    if(!text_words(w, i, prefix, NAME_WORDS, name, err)) return false;
+    if(!validUtf8(name, &units) || units > NAME_UNITS){ err = "a name that is not UTF-8, or too long"; return false; }
     return true;
 }
 
@@ -131,12 +138,7 @@ void add_events(std::vector<std::string>& w, const std::string& prefix, unsigned
     }
 }
 
-bool valid_led(const std::string& led){
-    if(led.empty() || led.size() > 15) return false;
-    for(char c : led)
-        if(!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
-    return true;
-}
+
 
 bool event_known(const Event& e){
     const EventKind k = eventKind(e);
@@ -151,9 +153,17 @@ bool Action::sameAs(const Action& o) const {
     switch(kind){
     case NATIVE: return true;
     case REMAP: return dst == o.dst;
-    case MACRO: return subtype == o.subtype && start == o.start && run == o.run && repeat == o.repeat && events == o.events;
+    case MACRO: return subtype == o.subtype && start == o.start && run == o.run && repeat == o.repeat && events == o.events &&
+                       imitateMs == o.imitateMs;
     }
     return false;
+}
+
+bool Action::longestImitate() const {
+    // as the daemon tells it (cape_hwbind.c): three events, the middle one the delay c0 ff ff ff
+    if(kind != MACRO || events.size() != 3) return false;
+    const Event& d = events[1];
+    return d.b0 == 0xc0 && d.b1 == 0xff && d.b2 == 0xff && d.b3 == 0xff;
 }
 
 EventKind eventKind(const Event& e){
@@ -215,6 +225,8 @@ bool sameBindings(const Keys& a, const Keys& b){
         if(!a[k].sameAs(b[k])) return false;
     return true;
 }
+
+bool validId(const std::string& id){ return valid_id(id); }
 
 std::string encode(const std::string& bytes){
     static const char hex[] = "0123456789ABCDEF";
@@ -301,8 +313,8 @@ bool parsePage(const std::string& line, Page& out, std::string& err){
     if(line.size() + 1 > LINE_BYTES){ err = "a line longer than the protocol allows"; return false; }
     const std::vector<std::string> w = split(line, ' ', static_cast<size_t>(-1));
     unsigned long m, gen, p, pages;
-    if(w.size() < 5 || w[0] != "mode" || !dec(w[1], 3, m) || m < 1 || w[2] != "hwbind" || !dec(w[3], 0xffffffffUL, gen)){
-        err = "not an answer to get :hwbind";
+    if(w.size() < 5 || w[0] != "mode" || !dec(w[1], 3, m) || m < 1 || w[2] != "hwslot" || !dec(w[3], 0xffffffffUL, gen)){
+        err = "not an answer to get :hwslot";
         return false;
     }
     out.mode = static_cast<unsigned>(m);
@@ -327,34 +339,41 @@ bool parsePage(const std::string& line, Page& out, std::string& err){
     return true;
 }
 
-bool parseRecord(const std::vector<std::string>& w, Record& out, std::string& err){
-    out = Record();
+static bool readRecord(const std::vector<std::string>& w, Record& out, std::string& err){
     size_t i = 0;
     auto next = [&](const char* prefix) -> bool { return i < w.size() && starts(w[i], prefix); };
-    if(!next("v:1") || w[i] != "v:1"){ err = "not a record of version 1"; return false; }
-    ++i;
     if(!next("id:") || !valid_id(w[i].substr(3))){ err = "a malformed id"; return false; }
     out.id = w[i++].substr(3);
-    if(!next("st:")){ err = "no state"; return false; }
-    const std::vector<std::string> st = split(w[i].substr(3), ':', 2);
-    if(st[0] == "ok" && st.size() == 1) out.state = Record::OK;
-    else if(st[0] == "empty" && st.size() == 1) out.state = Record::EMPTY;
-    else if((st[0] == "raw" || st[0] == "broken") && st.size() == 2 && st[1].size() <= TEXT_MAX && decode(st[1], out.reason)
-            && validUtf8(out.reason))
-        out.state = st[0] == "raw" ? Record::RAW : Record::BROKEN;
+    if(i < w.size() && w[i] == "st:ok") out.state = Record::OK;
+    else if(i < w.size() && w[i] == "st:empty") out.state = Record::EMPTY;
+    else if(i < w.size() && w[i] == "st:none") out.state = Record::READONLY;
     else { err = "a malformed state"; return false; }
     ++i;
     if((out.state == Record::EMPTY) != (out.id == "0")){ err = "an id that does not go with the state"; return false; }
-    if(next("ro:") && out.state != Record::EMPTY){
+    if(out.state == Record::EMPTY){
+        if(w.size() != 4 || w[2] != "lights:known:0:0" || w[3] != "end"){ err = "a malformed empty record"; return false; }
+        out.light = Record::NONE;
+        out.lighting.data().known = 1;
+        return true;
+    }
+    const bool ok = out.state == Record::OK;
+    if(!ok){
+        // why it cannot be rewritten, and what is wrong with its PROFILE.ZIP if that is the reason
+        if(!next("ro:")){ err = "a slot that cannot be rewritten, without its reason"; return false; }
         const std::string t = w[i].substr(3);
-        if(t.size() > TEXT_MAX || !decode(t, out.readonlyWhy) || !validUtf8(out.readonlyWhy)){ err = "a malformed ro word"; return false; }
+        if(t.empty() || t.size() > TEXT_MAX || !decode(t, out.readonlyWhy) || !validUtf8(out.readonlyWhy)){ err = "a malformed ro word"; return false; }
         out.readonly = true;
         ++i;
     }
-    if(out.state == Record::EMPTY){
-        if(w.size() != 6 || w[3] != "lt:empty" || w[4] != "ly:0" || w[5] != "end"){ err = "a malformed empty record"; return false; }
-        out.light = Record::NONE;
-        return true;
+    if(next("zip:")){
+        const std::string z = w[i].substr(4);
+        if(!ok && z == "none") out.zip = Record::ZIP_NONE;
+        else if(!ok && z == "unknown") out.zip = Record::ZIP_UNKNOWN;
+        else if(!ok && z == "corrupt") out.zip = Record::ZIP_CORRUPT;
+        else if(!ok && z == "uncompilable") out.zip = Record::ZIP_UNCOMPILABLE;
+        else if(ok && z == "stale") out.zip = Record::ZIP_STALE;
+        else { err = "a malformed zip word"; return false; }
+        ++i;
     }
     if(next("nm:")){
         if(!name_words(w, i, "nm:", out.name, err)) return false;
@@ -362,7 +381,7 @@ bool parseRecord(const std::vector<std::string>& w, Record& out, std::string& er
     }
     uint32_t v;
     if(next("wl:")){
-        if(!hex_exact(w[i].substr(3), 2, v)){ err = "a malformed wl word"; return false; }
+        if(!ok || !hex_exact(w[i].substr(3), 2, v)){ err = "a malformed wl word"; return false; }
         out.hasWinlock = true;
         out.winlock = static_cast<uint8_t>(v);
         ++i;
@@ -377,22 +396,17 @@ bool parseRecord(const std::vector<std::string>& w, Record& out, std::string& er
         out.hasIndicators = true;
         ++i;
     }
-    if(!next("lt:")){ err = "no lt word"; return false; }
-    const std::string lt = w[i++].substr(3);
-    if(lt == "static") out.light = Record::STATIC;
-    else if(lt == "empty") out.light = Record::NONE;
-    else if(lt == "effects") out.light = Record::EFFECTS;
-    else if(lt == "unknown") out.light = Record::UNKNOWN;
-    else { err = "a malformed lt word"; return false; }
-    unsigned long layers;
-    if(!next("ly:") || !dec(w[i].substr(3), 0xffffffffUL, layers)){ err = "a malformed ly word"; return false; }
-    out.layers = static_cast<unsigned>(layers);
-    ++i;
+    if(!HwLighting::read(w, i, out.lighting, err)) return false;
+    if(out.lighting.data().known != int(ok)){ err = "lighting availability does not match the slot state"; return false; }
+    out.layers = out.lighting.data().count;
+    out.light = !ok ? Record::UNKNOWN : out.layers ? Record::STATIC : Record::NONE;
+    for(uint32_t l = 0; l < out.layers; ++l)
+        if(out.lighting.data().layers[l].effect.kind != CAPE_PROFILE_STATIC) out.light = Record::EFFECTS;
     int last = -1;
     while(next("m:")){
         const std::vector<std::string> f = split(w[i].substr(2), ':', 3);
         uint32_t k, d;
-        if(out.state != Record::OK || f.size() != 2 || !hex_exact(f[0], 2, k) || k >= KEYS || !hex_exact(f[1], 2, d) || !valid_dst(d)
+        if(!ok || f.size() != 2 || !hex_exact(f[0], 2, k) || k >= KEYS || !hex_exact(f[1], 2, d) || !valid_dst(d)
            || static_cast<int>(k) <= last){
             err = "a malformed m word";
             return false;
@@ -407,7 +421,7 @@ bool parseRecord(const std::vector<std::string>& w, Record& out, std::string& er
         const std::vector<std::string> f = split(w[i].substr(2), ':', 9);
         uint32_t k, sub, start, run, rep, flags;
         unsigned long nev;
-        if(out.state != Record::OK || f.size() != 8 || !hex_exact(f[0], 2, k) || k >= KEYS || static_cast<int>(k) <= last
+        if(!ok || f.size() != 8 || !hex_exact(f[0], 2, k) || k >= KEYS || static_cast<int>(k) <= last
            || out.keys[k].kind != Action::NATIVE || (f[1] != "-" && (f[1].size() != 4 || f[1][0] != 'M' || f[1].find_first_not_of("0123456789abcdef", 1) != std::string::npos))
            || !hex_exact(f[2], 2, sub) || !hex_exact(f[3], 2, start) || !hex_exact(f[4], 2, run) || !hex_exact(f[5], 2, rep)
            || !dec(f[6], 131072, nev) || !hex_exact(f[7], 2, flags)){
@@ -462,8 +476,37 @@ bool parseRecord(const std::vector<std::string>& w, Record& out, std::string& er
             fourNext = !lastWord && bytes == EVENT_BYTES - 2;
             ++i;
         }
+        char key[8];
+        std::snprintf(key, sizeof(key), ":%02x:", static_cast<unsigned>(k));
+        // The interval of an Imitate on press longer than its file can say
+        if(next("im:")){
+            const std::vector<std::string> f2 = split(w[i].substr(3), ':', 3);
+            uint32_t ik;
+            unsigned long ms;
+            if(f2.size() != 2 || !hex_exact(f2[0], 2, ik) || ik != k || !dec(f2[1], IMITATE_MAX, ms) || ms <= IMITATE_FILE_MAX
+               || !a.longestImitate()){
+                err = "a malformed im word";
+                return false;
+            }
+            a.imitateMs = ms;
+            ++i;
+        }
+        // The string of a Text
+        if(next("tx:")){
+            if(a.subtype != TEXT || !text_words(w, i, std::string("tx") + key, TX_WORDS, a.text, err) || a.text.empty()){
+                if(err.empty() || a.subtype != TEXT) err = "a malformed tx word";
+                return false;
+            }
+        }
     }
     if(i + 1 != w.size() || w[i] != "end"){ err = "the record does not end where it should"; return false; }
+    return true;
+}
+
+bool parseRecord(const std::vector<std::string>& words, Record& out, std::string& error){
+    Record result;
+    if(!readRecord(words, result, error)) return false;
+    out = std::move(result);
     return true;
 }
 
@@ -485,21 +528,12 @@ std::vector<std::string> stageWords(const Stage& s){
             w.push_back("name:" + x + buf + encode(pieces[i]));
         }
     }
-    w.push_back("light:" + x + (s.keepLight ? ":keep" : ":pic"));
+    w.push_back("light:" + x + (s.keepLight ? ":keep" : ":model"));
     if(!s.keepLight){
-        std::string cur;
-        for(const auto& led : s.rgb){       // std::map: ascending byte order of name
-            if(!valid_led(led.first) || led.second > 0xffffff) return std::vector<std::string>();
-            if(!led.second) continue;
-            std::snprintf(buf, sizeof(buf), "=%06x", static_cast<unsigned>(led.second));
-            const std::string item = led.first + buf;
-            if(!cur.empty() && cur.size() + 1 + item.size() <= WORD_MAX) cur += "," + item;
-            else {
-                if(!cur.empty()) w.push_back(cur);
-                cur = "rgb:" + x + ":" + item;
-            }
-        }
-        if(!cur.empty()) w.push_back(cur);
+        std::vector<std::string> lighting;
+        std::string error;
+        if(!s.lighting.data().known || !HwLighting::write(s.lighting, lighting, error, x)) return {};
+        w.insert(w.end(), lighting.begin(), lighting.end());
     }
     if(s.hasWinlock){
         std::snprintf(buf, sizeof(buf), ":%02x", s.winlock);
@@ -512,8 +546,7 @@ std::vector<std::string> stageWords(const Stage& s){
     }
     if(s.keepBindings) w.push_back("bind:" + x + ":keep");
     else {
-        std::snprintf(buf, sizeof(buf), ":model");
-        w.push_back("bind:" + x + buf + (s.recreate ? ":recreate" : ""));
+        w.push_back("bind:" + x + ":model");
         for(unsigned k = 0; k < KEYS; ++k){
             if(s.keys[k].kind != Action::REMAP) continue;
             if(!valid_dst(s.keys[k].dst)) return std::vector<std::string>();
@@ -529,6 +562,11 @@ std::vector<std::string> stageWords(const Stage& s){
                           static_cast<unsigned>(a.events.size()));
             w.push_back("act:" + x + buf);
             add_events(w, "ev:" + x, k, a.events);
+            if(a.imitateMs){
+                if(a.imitateMs <= IMITATE_FILE_MAX || a.imitateMs > IMITATE_MAX || !a.longestImitate()) return std::vector<std::string>();
+                std::snprintf(buf, sizeof(buf), ":%02x:%lu", k, a.imitateMs);
+                w.push_back("im:" + x + buf);
+            }
         }
     }
     std::snprintf(buf, sizeof(buf), ":%u", static_cast<unsigned>(w.size()));

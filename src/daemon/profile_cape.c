@@ -9,8 +9,14 @@
 #include "usb.h"
 
 #include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stddef.h>
 #include <time.h>
+#include <unistd.h>
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
 
 // usb.c, set by --enable-experimental (main.c): the on-board profiles are reached only with it
 extern int enable_experimental;
@@ -168,7 +174,7 @@ struct cape_state {
     unsigned progress_slot;
     int progress_nnumber;
     const char* progress_type;       // the word of the line: "hwsave", "hwsavecheck" (a heartbeat of a check) or "hwread"
-    // hwslot1: the preparations of the saves, and the records of the slots for get :hwbind, made again when the image changes
+    // hwslot: the preparations of the saves, and the records of the slots for get :hwslot, made again when the image changes
     cape_stage stage;
     cape_hwbind_record rec[CAPE_SLOTS];
     unsigned rec_gen[CAPE_SLOTS];
@@ -195,6 +201,45 @@ static void cape_usb_progress(void* ctx, unsigned done, unsigned total, const ch
     nprintf(kb, cs->progress_nnumber, NULL, "mode %u %s progress %u %u %s\n", cs->progress_slot + 1,
             cs->progress_type ? cs->progress_type : "hwsave", done, total, phase);
 }
+
+// The random bytes of what a save makes new (the GUID of a new profile, the seed of the identities of its actions and layers): the
+// system's, getrandom() on Linux and arc4random_buf() on macOS, /dev/urandom if getrandom() is missing; 0, or -1 if there are none
+static int system_random(uint8_t* out, size_t n){
+#if defined(__APPLE__)
+    arc4random_buf(out, n);
+    return 0;
+#else
+    size_t got = 0;
+#if defined(__linux__)
+    while(got < n){
+        const ssize_t r = getrandom(out + got, n - got, 0);
+        if(r < 0){
+            if(errno == EINTR)
+                continue;
+            break;
+        }
+        got += (size_t)r;
+    }
+#endif
+    if(got < n){
+        const int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+        while(fd >= 0 && got < n){
+            const ssize_t r = read(fd, out + got, n - got);
+            if(r <= 0){
+                if(r < 0 && errno == EINTR)
+                    continue;
+                break;
+            }
+            got += (size_t)r;
+        }
+        if(fd >= 0)
+            close(fd);
+    }
+    return got == n ? 0 : -1;
+#endif
+}
+
+int (*cape_device_random)(uint8_t* out, size_t n) = system_random;
 
 const cape_slot_image* cape_device_image(usbdevice* kb, unsigned slot, unsigned* gen){
     const struct cape_state* cs = kb ? kb->cape : NULL;
@@ -308,52 +353,10 @@ int cmd_hwload_cape(usbdevice* kb, usbmode* dummy1, int dummy2, int apply, const
 // ---------------------------------------------------------------------------------------------------------
 // hwsave and its check
 
-// The picture of a mode of the GUI as a save needs it, a copy, so that the seconds a save or a check takes are not spent holding
-// imutex. slot is -1 for a mode that is not a slot of the keyboard.
-typedef struct {
-    int slot;
-    uint8_t r[N_KEYS_EXTENDED], g[N_KEYS_EXTENDED], b[N_KEYS_EXTENDED];
-    uint16_t name[MD_NAME_LEN];
-    size_t name_units;
-    uint8_t guid[16];    // the one a new profile in the slot would have (the same that hwload made for the empty slot)
-} cape_pic;
-
 #define CAPE_CHECK_LINE 384
 
-// Copies what a save or its check needs from a mode (imutex held)
-static void cape_pic_take(usbdevice* kb, usbmode* mode, cape_pic* pic){
-    memset(pic, 0, sizeof(*pic));
-    const size_t index = (size_t)(mode - kb->profile->mode);   // (a mode before the first is a very large index)
-    pic->slot = index < CAPE_SLOTS ? (int)index : -1;
-    if(pic->slot < 0)
-        return;
-    static_assert(sizeof(pic->r) == sizeof(mode->light.r), "the picture is the size of the lighting of a mode");
-    memcpy(pic->r, mode->light.r, sizeof(pic->r));
-    memcpy(pic->g, mode->light.g, sizeof(pic->g));
-    memcpy(pic->b, mode->light.b, sizeof(pic->b));
-    size_t n = 0;
-    while(n < MD_NAME_LEN && mode->name[n])
-        n++;
-    memcpy(pic->name, mode->name, n * sizeof(pic->name[0]));
-    pic->name_units = n;
-    uint8_t id[CAPE_SLOTID_SIZE];
-    cape_hw_synth_id(kb->serial, pic->slot, NULL, id);
-    memcpy(pic->guid, id, sizeof(pic->guid));
-}
-
-static cape_slot_edit edit_of(const cape_pic* pic, int force){
-    cape_slot_edit e;
-    memset(&e, 0, sizeof(e));
-    e.r = pic->r;
-    e.g = pic->g;
-    e.b = pic->b;
-    e.leds = N_KEYS_EXTENDED;
-    e.name = pic->name;   // (no units: no name, and the plan keeps the one the slot has)
-    e.name_units = pic->name_units;
-    e.guid = pic->guid;
-    e.force = force;
-    return e;
-}
+// hwsave and its check save the colours of a mode alone, and write no PROFILE.ZIP: this keyboard is saved with hwslot
+#define CAPE_HWSAVE_REFUSED "hwsave writes no PROFILE.ZIP, which this keyboard is saved with: hwslot"
 
 static const char* slot_state_name(cape_wslot_state st){
     switch(st){
@@ -375,24 +378,18 @@ static void check_line(const cape_hwsave_result* r, int light_keep, char* line, 
         return;
     }
     const cape_slot_plan* p = &r->plan;
-    size_t n = (size_t)snprintf(line, cap, "%s colours=%u layers=%u", cape_slot_verdict_name(p->verdict), p->colours, p->layers);
+    size_t n = (size_t)snprintf(line, cap, "%s colours=%u layers=%u active=%u", cape_slot_verdict_name(p->verdict), p->colours, p->layers, p->active);
 #define ADD(...) do { if(n < cap) n += (size_t)snprintf(line + n, cap - n, __VA_ARGS__); } while(0)
-    if(p->replaces)
-        ADD(" replaces=%s%s%s", p->replaces & CAPE_REPLACES_EFFECTS ? "effects" : "",
-            (p->replaces & CAPE_REPLACES_EFFECTS) && (p->replaces & CAPE_REPLACES_UNKNOWN) ? "," : "",
-            p->replaces & CAPE_REPLACES_UNKNOWN ? "unknown" : "");
-    if(p->ignored)
-        ADD(" ignored=%u", p->ignored);
     if(p->name_changed)
         ADD(" name=changed");
-    if(p->buttons_changed)
-        ADD(" buttons=changed");
     if(p->bindings_changed)
         ADD(" bindings=changed");
     if(p->winlock_changed)
         ADD(" winlock=changed");
     if(p->indicators_changed)
         ADD(" indicators=changed");
+    if(p->model_changed)
+        ADD(" model=changed");
     if(light_keep)
         ADD(" lights=kept");
     if(r->from_snapshot)
@@ -404,7 +401,7 @@ static void check_line(const cape_hwsave_result* r, int light_keep, char* line, 
 
 // The check of an edit of slot 0..2: reads the slot (call it without imutex) and writes nothing to it. beat_node >= 0: "hwsavecheck
 // progress" lines go there while it reads (hwslot: a heartbeat for the GUI's guard, the slot can take long to read)
-static void check_edit(usbdevice* kb, unsigned slot, const cape_slot_edit* edit, cape_hwsave_result* r, int beat_node){
+static void check_edit(usbdevice* kb, unsigned slot, const cape_slot_edit* edit, cape_hwsave_result* r, int beat_node, cape_hwsave_prepared* prepared){
     struct cape_state* cs = state_of(kb);
     if(!cs){
         memset(r, 0, sizeof(*r));
@@ -421,38 +418,15 @@ static void check_edit(usbdevice* kb, unsigned slot, const cape_slot_edit* edit,
         cs->progress_type = "hwsavecheck";
         io.progress = cape_usb_progress;
     }
-    (void)cape_hwsave_check(&cs->hs, &io, slot, edit, r);
+    (void)cape_hwsave_prepare(&cs->hs, &io, slot, edit, r, prepared);
     kb->usbdelay_ns = saved_delay;
     hw_lighting_resume(kb, r->err);
     if(r->err != CAPE_OK)
         ckb_warn("ckb%d: on-board profiles: the check of a save to slot %u failed (%s)", INDEX_OF(kb, keyboard), slot + 1, cape_errstr(r->err));
 }
 
-// The check of hwsave: the picture and the name of a mode; line is what follows "hwsavecheck "
-static void cape_hwsavecheck(usbdevice* kb, const cape_pic* pic, char* line, size_t cap){
-    if(!kb->cape_ok){
-        snprintf(line, cap, "error err=%s", not_ok_why());
-        return;
-    }
-    struct cape_state* cs = state_of(kb);
-    if(pic->slot < 0 || !cs){
-        snprintf(line, cap, "refused colours=0 layers=0 reason=%s", cs ? "not a hardware mode" : "out of memory");
-        return;
-    }
-    const cape_slot_edit edit = edit_of(pic, 0);
-    cape_hwsave_result r;
-    check_edit(kb, (unsigned)pic->slot, &edit, &r, -1);
-    check_line(&r, 0, line, cap);
-}
-
 void cmd_get_hwsavecheck_cape(usbdevice* kb, usbmode* mode, int nnumber){
-    cape_pic pic;
-    cape_pic_take(kb, mode, &pic);
-    char line[CAPE_CHECK_LINE];
-    queued_mutex_unlock(imutex(kb));
-    cape_hwsavecheck(kb, &pic, line, sizeof(line));
-    queued_mutex_lock(imutex(kb));
-    nprintf(kb, nnumber, mode, "hwsavecheck %s\n", line);
+    nprintf(kb, nnumber, mode, "hwsavecheck error err=%s\n", kb->cape_ok ? CAPE_HWSAVE_REFUSED : not_ok_why());
 }
 
 // What the daemon knows of a slot after a save that was written and read back: kb->hw is made as hwload makes it, from what hwload
@@ -515,9 +489,9 @@ static void report_save(usbdevice* kb, int nnumber, unsigned slot, const cape_hw
     }
 }
 
-// The save proper, shared by hwsave and hwslot: slot 0..2, progress lines to node nnumber. Call it without imutex.
+// The save of the frozen hwslot transaction: slot 0..2, progress lines to node nnumber. Call it without imutex.
 // It brings the daemon's copies up to date after a save written and read back; the caller reports it (report_save)
-static void save_edit(usbdevice* kb, struct cape_state* cs, int nnumber, unsigned slot, const cape_slot_edit* edit, cape_hwsave_result* r){
+static void save_edit(usbdevice* kb, struct cape_state* cs, int nnumber, unsigned slot, cape_hwsave_prepared* prepared, cape_hwsave_result* r){
     // For cape_usb_progress(), right before the session that calls it opens
     cs->progress_slot = slot;
     cs->progress_nnumber = nnumber;
@@ -530,10 +504,10 @@ static void save_edit(usbdevice* kb, struct cape_state* cs, int nnumber, unsigne
     kb->usbdelay_ns = CAPE_READ_PACING_NS;
     cape_io io = { .ctx = kb, .send = cape_usb_send_once, .xfer = cape_usb_xfer, .sleep_ms = cape_usb_sleep, .send_cont = cape_usb_send_cont,
                    .phase = cape_usb_phase, .progress = cape_usb_progress };
-    (void)cape_hwsave_run_ex(&cs->hs, &io, slot, edit, r, &image);
+    (void)cape_hwsave_save_prepared(&cs->hs, &io, slot, prepared, r, &image);
     kb->usbdelay_ns = saved_delay;
 
-    // (cape_hwsave_run has ended its session: the last thing it did with the keyboard was reading a status, so the lighting frame
+    // (cape_hwsave_save_prepared has ended its session: the last thing it did with the keyboard was reading a status, so the lighting frame
     // that command.c sends next cannot come in the middle of a file)
     if(r->slot_ok)
         hw_after_save(kb, cs, slot, r, &image);
@@ -544,33 +518,14 @@ static void save_edit(usbdevice* kb, struct cape_state* cs, int nnumber, unsigne
 int cmd_hwsave_cape(usbdevice* kb, usbmode* mode, int nnumber, int dummy3, const char* dummy4){
     (void)dummy3;
     (void)dummy4;
-
-    const int idx = INDEX_OF(kb, keyboard);
-    if(!kb->cape_ok){
-        ckb_warn("ckb%d: on-board profiles: not saved, %s", idx, not_ok_why());
-        nprintf(kb, nnumber, mode, "hwsave fail stage=prepare file=- slot=unchanged kept=no err=%s\n", not_ok_why());
-        return 0;
-    }
-    cape_pic pic;
-    queued_mutex_lock(imutex(kb));
-    cape_pic_take(kb, mode, &pic);
-    queued_mutex_unlock(imutex(kb));
-    struct cape_state* cs = state_of(kb);
-    if(pic.slot < 0 || !cs){
-        ckb_warn("ckb%d: on-board profiles: not saved, %s", idx, cs ? "the mode is not one of the slots of the keyboard" : "out of memory");
-        nprintf(kb, nnumber, mode, "hwsave skipped refused reason=%s\n", cs ? "not a hardware mode" : "out of memory");
-        return 0;
-    }
-    const cape_slot_edit edit = edit_of(&pic, 1);
-    cape_hwsave_result r;
-    save_edit(kb, cs, nnumber, (unsigned)pic.slot, &edit, &r);
-    report_save(kb, nnumber, (unsigned)pic.slot, &r, cs->hs.has_snap[pic.slot], 0);
-    // A failure of the transport is reported, not returned: 0 for every outcome, so that nothing writes again (see profile_cape.h)
+    const char* why = kb->cape_ok ? CAPE_HWSAVE_REFUSED : not_ok_why();
+    ckb_warn("ckb%d: on-board profiles: not saved, %s", INDEX_OF(kb, keyboard), why);
+    nprintf(kb, nnumber, mode, "hwsave fail stage=prepare file=- slot=unchanged kept=no err=%s\n", why);
     return 0;
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// hwslot1 (cape_hwslot.h): the record of a slot, the preparation of a save, its check and its save
+// hwslot (cape_hwslot.h): the record of a slot, the preparation of a save, its check and its save, the erase of a slot
 
 void cape_node_closed(usbdevice* kb, int node){
     if(kb && kb->cape)
@@ -589,43 +544,31 @@ typedef struct {
 // The edit a transaction describes. The LEDs of rgb: are the names of the daemon's keymap; a name that is not one, or that has no light,
 // or two names of the same LED with other colours, is an error of the preparation. Returns 0, or -1 with why.
 static int txn_edit(usbdevice* kb, const cape_stage_txn* t, unsigned slot, int force, c_edit* ce, char* why, size_t cap){
+    (void)slot;
     memset(ce, 0, sizeof(*ce));
     ce->e.r = ce->r;
     ce->e.g = ce->g;
     ce->e.b = ce->b;
     ce->e.leds = N_KEYS_EXTENDED;
-    for(size_t i = 0; i < t->nrgb; i++){
-        const cape_stage_rgb* x = &t->rgb[i];
-        int led = -2;
-        for(int k = 0; k < N_KEYS_EXTENDED && led == -2; k++)
-            if(kb->keymap[k].name && !strcmp(kb->keymap[k].name, x->led))
-                led = kb->keymap[k].led;
-        if(led < 0 || led >= N_KEYS_EXTENDED){
-            snprintf(why, cap, led == -2 ? "there is no LED called %s" : "%s has no light", x->led);
-            return -1;
-        }
-        if(ce->set[led] && (ce->r[led] != x->rgb[0] || ce->g[led] != x->rgb[1] || ce->b[led] != x->rgb[2])){
-            snprintf(why, cap, "the LED of %s has two colours", x->led);
-            return -1;
-        }
-        ce->set[led] = 1;
-        ce->r[led] = x->rgb[0];
-        ce->g[led] = x->rgb[1];
-        ce->b[led] = x->rgb[2];
-    }
     if(t->has_name){
         ce->e.name = t->name;
         ce->e.name_units = t->name_units;
         ce->e.name_exact = 1;
     }
-    uint8_t id[CAPE_SLOTID_SIZE];
-    cape_hw_synth_id(kb->serial, (int)slot, NULL, id);
-    memcpy(ce->guid, id, sizeof(ce->guid));
+    // What the first check drew for the transaction: the GUID of a new profile, the seed of the new identities of its model
+    if(!t->drawn){
+        snprintf(why, cap, "nothing was drawn for the transaction");
+        return -1;
+    }
+    memcpy(ce->guid, t->guid, sizeof(ce->guid));
     ce->e.guid = ce->guid;
+    ce->e.seed = t->seed;
+    ce->e.hold = t->hold;
+    ce->e.nhold = t->nhold;
     ce->e.force = force;
     ce->e.bindings = t->bind == CAPE_STAGE_BIND_MODEL ? &t->model : NULL;
-    ce->e.recreate = t->recreate;
     ce->e.light_keep = t->light == CAPE_STAGE_LIGHT_KEEP;
+    ce->e.lighting = t->light == CAPE_STAGE_LIGHT_MODEL ? &t->lighting : NULL;
     ce->e.has_winlock = t->has_wl;
     ce->e.winlock = t->wl;
     ce->e.has_ind = t->has_ind;
@@ -638,9 +581,26 @@ static int txn_edit(usbdevice* kb, const cape_stage_txn* t, unsigned slot, int f
     return 0;
 }
 
+// The random bytes of a transaction, drawn at its first check and kept for its save and a Retry: the GUID of a new profile (version
+// 4, in the order iCUE writes a GUID in the slot table, the order of its text) and the seed of the identities of its model
+static int draw(cape_stage_txn* t){
+    if(t->drawn)
+        return 0;
+    if(cape_device_random(t->seed, sizeof(t->seed)) || cape_device_random(t->guid, sizeof(t->guid)))
+        return -1;
+    t->guid[6] = (uint8_t)((t->guid[6] & 0x0f) | 0x40);
+    t->guid[8] = (uint8_t)((t->guid[8] & 0x3f) | 0x80);
+    t->drawn = 1;
+    return 0;
+}
+
 static void hwslot_check(usbdevice* kb, struct cape_state* cs, int owner, unsigned slot, uint32_t txn){
     char why[CAPE_SLOT_WHY];
     cape_stage_txn* t = cape_stage_get(&cs->stage, owner, slot, txn, why, sizeof(why));
+    if(t && draw(t)){
+        snprintf(why, sizeof(why), "the system gave no random bytes");
+        t = NULL;
+    }
     c_edit ce;
     if(t && txn_edit(kb, t, slot, 0, &ce, why, sizeof(why)) != 0){
         cape_stage_end_slot(&cs->stage, slot);   // (a preparation that cannot be one: nothing of it is to be saved)
@@ -651,7 +611,12 @@ static void hwslot_check(usbdevice* kb, struct cape_state* cs, int owner, unsign
         return;
     }
     cape_hwsave_result r;
-    check_edit(kb, slot, &ce.e, &r, owner);
+    if(t->prepared.valid){
+        memset(&r, 0, sizeof(r));
+        r.plan = t->prepared.plan;
+        r.from_snapshot = t->prepared.recovery;
+    } else
+        check_edit(kb, slot, &ce.e, &r, owner, &t->prepared);
     char line[CAPE_CHECK_LINE];
     check_line(&r, ce.e.light_keep, line, sizeof(line));
     t->checked = r.err == CAPE_OK;
@@ -683,6 +648,10 @@ static int hwslot_save(usbdevice* kb, struct cape_state* cs, int owner, unsigned
         nprintf(kb, owner, NULL, "mode %u hwsave skipped refused reason=%s\n", slot + 1, t->check_reason);
         return 0;
     }
+    if(!t->prepared.valid){
+        nprintf(kb, owner, NULL, "mode %u hwsave skipped same\n", slot + 1);
+        return 0;
+    }
     const devcmd* vt = &kb->vtable;
     const int wrapped = !kb->active;
     if(wrapped){
@@ -696,13 +665,13 @@ static int hwslot_save(usbdevice* kb, struct cape_state* cs, int owner, unsigned
         }
     }
     cape_hwsave_result r;
-    save_edit(kb, cs, owner, slot, &ce.e, &r);
+    save_edit(kb, cs, owner, slot, &t->prepared, &r);
     int hwmode_failed = 0;
     if(wrapped)
         hwmode_failed = vt->idle(kb, kb->profile->currentmode, owner, 0, 0) != 0;
     else
         (void)vt->updatergb(kb, 1);
-    report_save(kb, owner, slot, &r, cs->hs.has_snap[slot], hwmode_failed);
+    report_save(kb, owner, slot, &r, t->prepared.recovery, hwmode_failed);
     if(r.err == CAPE_OK && r.wrote)
         cape_stage_end_slot(&cs->stage, slot);   // done; a failure keeps it for the Retry
     return wrapped;
@@ -715,10 +684,6 @@ static void hwslot_read(usbdevice* kb, struct cape_state* cs, int owner, unsigne
     const int idx = INDEX_OF(kb, keyboard);
     if(!cs->have){
         nprintf(kb, owner, NULL, "mode %u hwread fail err=the slots were not read when the keyboard was attached\n", slot + 1);
-        return;
-    }
-    if(cs->img[slot].whole){
-        nprintf(kb, owner, NULL, "mode %u hwread ok gen=%u packets=0\n", slot + 1, cs->gen[slot]);
         return;
     }
     cs->progress_slot = slot;
@@ -734,7 +699,7 @@ static void hwslot_read(usbdevice* kb, struct cape_state* cs, int owner, unsigne
     int rc = cape_session_open(&s, &io);
     if(rc == CAPE_OK){
         cape_session_progress_begin_alone(&s, CAPE_PHASE_READ, CAPE_PROGRESS_READ_FILES);
-        rc = cape_hwload_read_one(&s, slot, 1, &found, &img, cape_usb_log, kb);
+        rc = cape_hwload_read_one(&s, slot, CAPE_HWLOAD_ZIP, &found, &img, cape_usb_log, kb);   // as iCUE reads a slot
     }
     const unsigned packets = s.tx_packets;
     cape_session_close(&s);
@@ -762,6 +727,97 @@ static void hwslot_read(usbdevice* kb, struct cape_state* cs, int owner, unsigne
     nprintf(kb, owner, NULL, "mode %u hwread ok gen=%u packets=%u\n", slot + 1, cs->gen[slot], packets);
 }
 
+// hwslot erase:<m>:<base> (cape_hwslot.h, 5): slot 0..2 erased if it is still base, as iCUE deletes a profile. Made from hardware mode,
+// it is made in software mode and the keyboard switched back, as a save is (hwslot_save). Returns whether the profile of the modes was
+// erased (the caller's pointers into it are gone)
+static int hwslot_erase(usbdevice* kb, struct cape_state* cs, int owner, unsigned slot, const cape_slotid* base){
+    const int idx = INDEX_OF(kb, keyboard);
+    // What needs no reading is refused before the keyboard is switched: a base that is not the slot the daemon knows (the slot table
+    // itself is compared again in the session, cape_hwsave_erase)
+    const cape_slotid* known = &cs->slots[slot];
+    if(cs->have && (memcmp(known->guid, base->guid, sizeof(base->guid)) || known->cookie != base->cookie || known->flag != base->flag)){
+        nprintf(kb, owner, NULL, "mode %u hwerase refused reason=the slot is not the one it was read as: it changed since it was read\n",
+                slot + 1);
+        return 0;
+    }
+    const devcmd* vt = &kb->vtable;
+    const int wrapped = !kb->active;
+    if(wrapped){
+        vt->eraseprofile(kb, kb->profile->currentmode, owner, 0, 0);
+        if(vt->active(kb, kb->profile->currentmode, owner, 0, 0)){
+            const int back = vt->idle(kb, kb->profile->currentmode, owner, 0, 0);
+            ckb_err("ckb%d: on-board profiles: slot %u not erased, the keyboard did not switch to software mode", idx, slot + 1);
+            nprintf(kb, owner, NULL, "mode %u hwerase fail%s err=the keyboard did not switch to software mode\n", slot + 1,
+                    back ? " hwmode=failed" : "");
+            return 1;
+        }
+    }
+    cs->progress_slot = slot;
+    cs->progress_nnumber = owner;
+    cs->progress_type = "hwerase";
+    long saved_delay = kb->usbdelay_ns;
+    kb->usbdelay_ns = CAPE_READ_PACING_NS;
+    cape_io io = { .ctx = kb, .send = cape_usb_send_once, .xfer = cape_usb_xfer, .sleep_ms = cape_usb_sleep, .send_cont = cape_usb_send_cont,
+                   .phase = cape_usb_phase, .progress = cape_usb_progress };
+    cape_hwsave_result r;
+    (void)cape_hwsave_erase(&cs->hs, &io, slot, base, &r);
+    kb->usbdelay_ns = saved_delay;
+    int hwmode_failed = 0;
+    if(wrapped)
+        hwmode_failed = vt->idle(kb, kb->profile->currentmode, owner, 0, 0) != 0;
+    else
+        (void)vt->updatergb(kb, 1);
+    const char* hw = hwmode_failed ? " hwmode=failed" : "";
+    if(r.err == CAPE_OK && r.plan.verdict == CAPE_SLOT_REFUSED){
+        ckb_info("ckb%d: on-board profiles: slot %u not erased (%s)", idx, slot + 1, r.plan.reason);
+        nprintf(kb, owner, NULL, "mode %u hwerase refused reason=%s\n", slot + 1, r.plan.reason);
+        return wrapped;
+    }
+    // Erased, or maybe: what the transactions of the slot were made on is not there any more
+    cape_stage_end_slot(&cs->stage, slot);
+    cape_slot_image_free(&cs->img[slot]);
+    memset(&cs->img[slot], 0, sizeof(cs->img[slot]));
+    cs->gen[slot]++;
+    if(r.err == CAPE_OK){
+        // The slot is empty, and so is the daemon's copy of it
+        cs->img[slot].whole = 1;
+        cs->img[slot].from_zip = 1;
+        cape_light_slot_init(&cs->img[slot].light);
+        if(cs->have){
+            cs->found.slot[slot] = r.slot;
+            memset(&cs->slots[slot], 0, sizeof(cs->slots[slot]));
+            hwprofile* hwp = calloc(1, sizeof(hwprofile));
+            if(hwp){
+                hw_from_cape(hwp, &cs->found, cs->slots, kb->serial);
+                free(kb->hw);
+                kb->hw = hwp;
+            }
+        }
+        ckb_info("ckb%d: on-board profiles: slot %u erased (%u packets)", idx, slot + 1, r.packets);
+        nprintf(kb, owner, NULL, "mode %u hwerase ok gen=%u packets=%u%s\n", slot + 1, cs->gen[slot], r.packets, hw);
+    } else {
+        // Not known any more: read again when asked (nocache)
+        cs->img[slot].present = 1;
+        ckb_err("ckb%d: on-board profiles: the erase of slot %u failed (%s)", idx, slot + 1, cape_errstr(r.err));
+        nprintf(kb, owner, NULL, "mode %u hwerase fail%s err=%s\n", slot + 1, hw, cape_errstr(r.err));
+    }
+    return wrapped;
+}
+
+// "erase:<m>:<base>": the slot index and the entry of the slot table of base, or -1
+static int erase_word(const char* word, cape_slotid* base){
+    if(strncmp(word, "erase:", 6) || word[6] < '1' || word[6] > '0' + CAPE_SLOTS || word[7] != ':')
+        return -1;
+    uint8_t entry[CAPE_SLOTID_SIZE];
+    const int kind = cape_hwslot_parse_id(word + 8, strlen(word + 8), entry);
+    if(kind < 0)
+        return -1;
+    memset(base, 0, sizeof(*base));
+    if(kind == 1 && cape_slotid_parse(entry, sizeof(entry), base) != CAPE_OK)
+        return -1;
+    return word[6] - '1';
+}
+
 // "read:<m>", m = 1..3 in decimal: the slot index, or -1
 static int read_word(const char* word){
     if(strncmp(word, "read:", 5) || word[5] < '1' || word[5] > '0' + CAPE_SLOTS || word[6])
@@ -781,6 +837,17 @@ int cmd_hwslot_cape(usbdevice* kb, int nnumber, const char* word){
             nprintf(kb, nnumber, NULL, "mode %d hwread fail err=%s\n", slot + 1, not_ok_why());
         else
             hwslot_read(kb, cs, nnumber, (unsigned)slot);
+        return 0;
+    }
+    if(!strncmp(word, "erase:", 6)){
+        cape_slotid base;
+        const int slot = erase_word(word, &base);
+        if(slot < 0)
+            ckb_warn("ckb%d: on-board profiles: a word of hwslot that is not one, ignored", INDEX_OF(kb, keyboard));
+        else if(!kb->cape_ok)
+            nprintf(kb, nnumber, NULL, "mode %d hwerase fail err=%s\n", slot + 1, not_ok_why());
+        else
+            return hwslot_erase(kb, cs, nnumber, (unsigned)slot, &base);
         return 0;
     }
     unsigned slot = 0;
@@ -806,7 +873,7 @@ int cmd_hwslot_cape(usbdevice* kb, int nnumber, const char* word){
     return 0;
 }
 
-// The record of slot 0..2 for get :hwbind, made again when the daemon's copy of the slot has changed
+// The record of slot 0..2 for get :hwslot, made again when the daemon's copy of the slot has changed
 static const cape_hwbind_record* record_of(usbdevice* kb, struct cape_state* cs, unsigned slot, unsigned* gen){
     const cape_slot_image* img = cape_device_image(kb, slot, gen);
     if(!img || !img->whole)
@@ -822,16 +889,11 @@ static const cape_hwbind_record* record_of(usbdevice* kb, struct cape_state* cs,
     uint8_t entry[CAPE_SLOTID_SIZE], ind[CAPE_IND_COUNT * 3];
     cape_slotid_build(&img->id, entry, sizeof(entry));
     memcpy(ind, img->light.ind, sizeof(ind));
-    cape_hwbind_light light = CAPE_HWBIND_LIGHT_UNKNOWN;
-    if(img->light.state == CAPE_LIGHT_STATIC)
-        light = CAPE_HWBIND_LIGHT_STATIC;
-    else if(img->light.state == CAPE_LIGHT_EMPTY)
-        light = CAPE_HWBIND_LIGHT_EMPTY;
-    else if(img->light.state == CAPE_LIGHT_EFFECTS)
-        light = CAPE_HWBIND_LIGHT_EFFECTS;
+    const int model = img->zip == CAPE_ZIP_OK || img->zip == CAPE_ZIP_STALE;
     const cape_hwbind_slot s = { img->present ? entry : NULL, &img->bind, units >= 0 ? name : NULL, units >= 0 ? (size_t)units : 0,
-                                 img->present && img->light.ind_ok ? ind : NULL, light, img->light.layers,
-                                 img->present && img->refused ? img->reason : NULL };
+                                 img->present && img->light.ind_ok ? ind : NULL,
+                                 img->present && img->refused ? img->reason : NULL, img->zip,
+                                 img->present && model ? &img->model : NULL };
     if(cape_hwbind_make(&s, slot + 1, *gen, &cs->rec[slot]) != CAPE_OK){
         cape_hwbind_free(&cs->rec[slot]);
         return NULL;
@@ -859,8 +921,8 @@ static int parse_dec(const char** p, unsigned* out){
 }
 
 void cmd_get_hwbind_cape(usbdevice* kb, int nnumber, const char* setting){
-    // :hwbind:<m>:<p>
-    const char* p = setting + strlen(":hwbind:");
+    // :hwslot:<m>:<p>
+    const char* p = setting + strlen(":hwslot:");
     unsigned m = 0, page = 0;
     if(!parse_dec(&p, &m) || *p++ != ':' || !parse_dec(&p, &page) || *p || m < 1 || m > CAPE_SLOTS)
         return;

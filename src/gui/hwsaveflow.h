@@ -5,25 +5,24 @@
 #include <string>
 #include <vector>
 
-// The save through hwslot1: open (1). A build with K95P_HWSLOT_SAVE 0 checks the slots and never saves them (a build for a trial
-// that must not write).
+// The save and the erase of a slot through hwslot: a build with K95P_HWSLOT_SAVE 0 checks the slots and never saves or erases
+// one (a build for a trial that must not write); 1 opens them.
 #ifndef K95P_HWSLOT_SAVE
 #define K95P_HWSLOT_SAVE 1
 #endif
 
-// K95 Platinum save transaction, independent of Qt and of the FIFO implementation.
+// K95 Platinum save transaction, independent of Qt and of the FIFO implementation; also the erase of a slot (start_erase), which
+// goes the same way: the device busy, the progress, the guard of 30 s, a late answer, the read-back of the slot.
 // The caller owns the notification node exclusively for the life of this object.
 // Transaction IDs below are local send/dialog IDs, not IDs on the daemon wire.
 class HwSaveFlow {
 public:
     struct Slot {
         unsigned mode = 0;                 // GUI mode, 1..3
+        std::string name;                  // the name the slot is saved with (for the warning in words, by the caller)
         std::vector<std::string> prepare; // complete, validated daemon command lines, including newline
-        bool animations = false;
-        bool invisible_keys = false;
-        bool many_colours = false;         // warning only; check decides whether reconstruction is possible
-        // hwslot1: the whole "@N hwslot check:/save:/abort:" lines of the slot's transaction (prepare holds its
-        // "@N hwslot" preparation lines). Either every slot has them or none (hwsave: "get :hwsavecheck" and "hwsave").
+        // hwslot: the whole "@N hwslot check:/save:/abort:" lines of the slot's transaction (prepare holds its
+        // "@N hwslot" preparation lines). All three command lines are mandatory.
         std::string check_line, save_line, abort_line;
     };
     enum EventKind { Send, Dialog, Progress, Refresh, Summary, ChannelUncertain };
@@ -40,9 +39,10 @@ public:
     };
     struct Outcome {
         unsigned mode = 0;
-        std::string verdict;              // written, unchanged, empty, refused, recovery, failed, not-tried
+        std::string verdict;              // written, unchanged, empty, refused, recovery, failed, not-tried; for an erase erased,
+                                           // not-erased (refused: nothing written), erase-failed (the slot read again), disabled
         std::string detail;
-        bool hwmode_failed = false;        // the keyboard did not go back to hardware mode after the save (hwslot1)
+        bool hwmode_failed = false;        // the keyboard did not go back to hardware mode after the save (hwslot)
         // Not enough free sectors in the flash ("space=<need>/<free>" of a fail line): nothing was written, and a Retry would give the
         // same, so no Retry is asked
         bool no_space = false;
@@ -52,6 +52,10 @@ public:
     };
 
     bool start(const std::vector<Slot>& slots, bool all, int64_t now_ms);
+    // The erase of slot mode (1..3) with its line ("@N hwslot erase:<m>:<base>\n"). In a build with the save shut nothing is sent:
+    // the outcome is "disabled"
+    bool start_erase(unsigned mode, const std::string& line, int64_t now_ms);
+    bool erasing() const { return erase_; }
     void send_result(uint64_t id, SendResult result, int64_t now_ms);
     void retry_send(int64_t now_ms);      // only after a proven zero-byte NotSent
     void line(const std::string& line, int64_t now_ms);
@@ -66,7 +70,7 @@ public:
     bool uncertain() const { return state_ == Broken; }
     const std::vector<Outcome>& outcomes() const { return outcomes_; }
     bool refresh_failed() const { return refresh_failed_; }
-    // hwslot1 with the save shut in this build: the slots were checked only (verdict "checked", the check in the detail)
+    // hwslot with the save shut in this build: the slots were checked only (verdict "checked", the check in the detail)
     bool check_only() const { return check_only_; }
     // One outcome as the summary shows it: "checked(same) colours=0 layers=1", "checked(changed) …" for a check that would write,
     // "<verdict>: <detail>" for the others ("failed: <err>", "refused: <reason>"; the verdict alone without a detail)
@@ -78,17 +82,11 @@ public:
 
 private:
     enum State { Idle, Preparing, Checking, Asking, Saving, WaitingUnknown, Refreshing, Aborting, Broken, Done };
-    enum CommandKind { PrepareCommand, CheckCommand, SaveCommand, AbortCommand };
+    enum CommandKind { PrepareCommand, CheckCommand, SaveCommand, AbortCommand, EraseCommand };
     struct Check {
         std::string verdict;
         std::string detail;
-        std::string replaces;
-        unsigned ignored = 0;
         bool kept = false;
-        bool buttons_changed = false;
-        bool name_changed = false;
-        bool bindings_changed = false;
-        bool lights_kept = false;
         std::string text;                  // what the check said, after "hwsavecheck "
     };
     State state_ = Idle;
@@ -105,7 +103,7 @@ private:
     DialogKind dialog_kind_ = Confirm;
     bool all_ = false, send_pending_ = false, waiting_send_ = false;
     bool waiting_reply_ = false, aborted_ = false, wrote_ = false, refresh_failed_ = false;
-    bool staged_ = false, check_only_ = false;
+    bool check_only_ = false, erase_ = false;
     std::vector<size_t> aborts_;           // slots whose transaction is still to be forgotten before the summary
     std::string send_line_;
     std::string waiting_type_;

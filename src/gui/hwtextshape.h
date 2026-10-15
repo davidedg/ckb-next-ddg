@@ -29,9 +29,9 @@ std::vector<HwBinding::Event> events(const std::vector<Stroke>& strokes, unsigne
 bool recognize(const std::vector<HwBinding::Event>& ev, std::vector<Stroke>& strokes, unsigned& delayMs);
 
 // iCUE's own table for a Text: the US layout, whatever the layout of the device and of the system (a character with no key in it,
-// like é, is dropped by iCUE: false here). A newline is Enter (once for "\r\n").
-bool icueUsStroke(char32_t c, Stroke& out);
-std::vector<Stroke> icueUsStrokes(const std::u32string& text, std::u32string* dropped = nullptr);
+// like é, is dropped by iCUE: false here). A newline is Enter (once for "\r\n"); a carriage return alone is dropped, as iCUE does.
+bool canonicalUsStroke(char32_t c, Stroke& out);
+std::vector<Stroke> canonicalUsStrokes(const std::u32string& text, std::u32string* dropped = nullptr);
 
 // UTF-8 to UTF-32; false for invalid UTF-8
 bool utf32(const std::string& utf8, std::u32string& out);

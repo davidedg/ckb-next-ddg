@@ -17,6 +17,8 @@ namespace Ui {
 class KbWidget;
 }
 
+class HwLightWidget;
+
 class KbWidget : public QWidget
 {
     Q_OBJECT
@@ -36,12 +38,15 @@ public:
     void setTabBarEnabled(const bool e);
 
     void showDeviceTab();
+    // The confirmation of an erase counts down its Yes in 3 steps of this many ms (1000; the tests make it shorter)
+    static int k95EraseStepMs;
 
 public slots:
     // Display firmware update dialog
     inline void showFwUpdate()          { on_fwUpdButton_clicked(); }
 
 private:
+    HwLightWidget* hwLightWidget;
     Ui::KbWidget *ui;
     quint64 lastAutoSave;
     // profileBox's palette before any "too many modes" color override, so it can
@@ -51,21 +56,26 @@ private:
 
     KbMode* currentMode;
     HwSaveController* k95SaveController = nullptr;
-    // hwslot1: the Binding tab of the modes of the hardware profile (ui->hwBindWidget)
+    // hwslot: the Binding tab of the modes of the hardware profile (ui->hwBindWidget)
     QString k95ReadText(int slot, const QString& otherwise) const;
+    // A slot that cannot be rewritten: what the GUI says of it (by what is wrong with its PROFILE.ZIP), and the daemon's reason
+    // for the tooltip (empty when the text says it)
+    QString k95ReadonlyText(const HwBinding::Record& base) const;
+    QString k95ReadonlyTip(const HwBinding::Record& base) const;
     void showHwBindings();
     void copyHwBindings(const QStringList& keys);
     void askK95Conflict(int slot);
     class MacroReader* k95Recorder = nullptr;
     void recordHw(bool start);
-    // hwslot1: the lighting of a slot with effects (ui->k95LightBar); the performance settings of a slot (ui->k95PerfWidget)
+    // hwslot: the lighting of a slot with effects (ui->k95LightBar); the performance settings of a slot (ui->k95PerfWidget)
     void showHwSlotExtras();
     void copyHwPerf();
-    void recreateHw(bool on);
-    void replaceHwLights();
     bool externalControlsEnabled = true;
     void updateK95SaveButtons();
     void saveK95(bool all);
+    void eraseK95();
+    void reloadK95();
+    int k95ReloadPending = -1;
 
     const static int GUID = Qt::UserRole;
     const static int NEW_FLAG = Qt::UserRole + 1;

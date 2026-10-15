@@ -36,6 +36,8 @@ if (MACOS OR LINUX)
     set(THREADS_PREFER_PTHREAD_FLAG ON)
     find_package(Threads REQUIRED)
     find_package(Iconv REQUIRED)
+    # PROFILE.ZIP of the K95 RGB Platinum (qCompress: a zlib stream)
+    find_package(ZLIB REQUIRED)
 endif ()
 if (MACOS)
     find_library(COREFOUNDATION_LIBRARY CoreFoundation)
@@ -69,11 +71,18 @@ if (MACOS OR LINUX)
               cape_hwload.c
               cape_hwsave.c
               cape_hwslot.c
+              cape_profile.c
+              cape_compile.c
+              cape_names.c
               cape_light.c
+              cape_lightmodel.c
               cape_progress.c
+              cape_qz.c
               cape_slot.c
               cape_stage.c
               cape_write.c
+              cape_xml.c
+              cape_zipslot.c
               command.c
               device.c
               device_keyboard.c
@@ -113,10 +122,16 @@ if (MACOS OR LINUX)
               cape_fw.h
               cape_hwload.h
               cape_hwsave.h
+              cape_profile.h
+              cape_compile.h
+              cape_names.h
               cape_light.h
               cape_progress.h
+              cape_qz.h
               cape_slot.h
               cape_write.h
+              cape_xml.h
+              cape_zipslot.h
               command.h
               device.h
               devnode.h
@@ -191,6 +206,7 @@ if (MACOS OR LINUX)
         ckb-next-daemon
             PRIVATE
               Threads::Threads
+              ZLIB::ZLIB
               "${ICONV_LIBRARIES}")
 endif ()
 if (MACOS)
@@ -204,7 +220,8 @@ elseif (LINUX)
     target_link_libraries(
         ckb-next-daemon
             PRIVATE
-              "${UDEV_LIBRARIES}")
+              "${UDEV_LIBRARIES}"
+              m)
 endif ()
 
 # Target compile features and options

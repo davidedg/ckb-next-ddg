@@ -50,7 +50,7 @@ QIcon ModeListTableModel::modeIcon(const int i) const{
     const KbProfile* const currentProfile = device->currentProfile();
     const KbProfile* const hwProfile = device->hwProfile();
     int hwModeCount = device->hwModeCount;
-    // hwslot1: the modes of a software profile are not slots
+    // hwslot: the modes of a software profile are not slots
     if(i >= hwModeCount || (device->k95HwSlots() && currentProfile != hwProfile))
         return QIcon(":/img/icon_mode.png");
     else
@@ -78,7 +78,7 @@ QVariant ModeListTableModel::data(const QModelIndex& index, int role) const{
             return QVariant();
         }
         if(col == COL_MODE_NAME){
-            // hwslot1: an empty slot (a save makes a new profile in it) until it is edited
+            // hwslot: an empty slot (a save makes a new profile in it) until it is edited
             if(role == Qt::DisplayRole && device->isHwSlotProfile(prof) && device->k95SlotEmpty(row) && !device->k95DraftModified(row))
                 return tr("%1 (empty)").arg(prof->at(row)->name());
             return prof->at(row)->name();

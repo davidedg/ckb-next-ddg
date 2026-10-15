@@ -64,7 +64,7 @@ int indexOfEvdev(int code, bool iso){
 
 namespace {
 // By name, as the keymap names them
-const char* const ICUE_KEYBOARD[] = {
+const char* const KEYSET_KEYBOARD[] = {
     "esc", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "prtscn", "scroll", "pause",
     "grave", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "minus", "equal", "bspace", "ins", "home", "pgup",
     "numlock", "numslash", "numstar", "numminus", "tab", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "lbrace", "rbrace",
@@ -73,8 +73,8 @@ const char* const ICUE_KEYBOARD[] = {
     "rshift", "up", "num1", "num2", "num3", "numenter", "lctrl", "lwin", "lalt", "space", "ralt", "rwin", "rmenu", "rctrl",
     "left", "down", "right", "num0", "numdot",
 };
-const char* const ICUE_MEDIA[] = { "mute", "volup", "voldn", "stop", "prev", "play", "next" };
-const char* const ICUE_LANGUAGE[] = { "hangul", "hanja", "ro", "katahira", "yen", "henkan", "muhenkan", "hash", "bslash_iso" };
+const char* const KEYSET_MEDIA[] = { "mute", "volup", "voldn", "stop", "prev", "play", "next" };
+const char* const KEYSET_LANGUAGE[] = { "hangul", "hanja", "ro", "katahira", "yen", "henkan", "muhenkan", "hash", "bslash_iso" };
 
 template<size_t N> bool inList(const char* const (&list)[N], unsigned index){
     for(const char* name : list)
@@ -83,11 +83,11 @@ template<size_t N> bool inList(const char* const (&list)[N], unsigned index){
 }
 } // namespace
 
-bool icueKeyboard(unsigned index){ return index < KEYS && inList(ICUE_KEYBOARD, index); }
-bool icueMedia(unsigned index){ return index < KEYS && inList(ICUE_MEDIA, index); }
-bool icueLanguage(unsigned index){ return index < KEYS && inList(ICUE_LANGUAGE, index); }
-bool isIcueDestination(unsigned index){
-    return (index >= MOUSE_FIRST && index <= MOUSE_LAST) || icueKeyboard(index) || icueMedia(index) || icueLanguage(index);
+bool keyboardKey(unsigned index){ return index < KEYS && inList(KEYSET_KEYBOARD, index); }
+bool mediaKey(unsigned index){ return index < KEYS && inList(KEYSET_MEDIA, index); }
+bool languageKey(unsigned index){ return index < KEYS && inList(KEYSET_LANGUAGE, index); }
+bool isSupportedDestination(unsigned index){
+    return (index >= MOUSE_FIRST && index <= MOUSE_LAST) || keyboardKey(index) || mediaKey(index) || languageKey(index);
 }
 
 } // namespace K95PKeyTable

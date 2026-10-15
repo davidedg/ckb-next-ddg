@@ -60,17 +60,10 @@ HwSaveController::HwSaveController(HwSaveDevice* device, QWidget* parent)
     });
 }
 
-bool HwSaveController::start(const std::vector<HwSaveFlow::Slot>& saveSlots, bool all,
-                             const std::array<bool, 3>& rgbRequired){
-    if(active_ || !device_ || !device_->begin()) return false;
-    active_ = true; uncertain_ = false; rgbRequired_ = rgbRequired;
-    clock_.start();
-    if(!flow_.start(saveSlots, all, clock_.elapsed())){
-        device_->end(); active_ = false; return false;
-    }
+bool HwSaveController::begin(const QString& title, const QString& label){
     progress_ = new QProgressDialog(parent_);
-    progress_->setWindowTitle(tr("Hardware save"));
-    progress_->setLabelText(tr("Checking hardware slots…"));
+    progress_->setWindowTitle(title);
+    progress_->setLabelText(label);
     progress_->setCancelButton(nullptr);
     progress_->setRange(0, 1000);
     progress_->setMinimumDuration(400);
@@ -80,6 +73,30 @@ bool HwSaveController::start(const std::vector<HwSaveFlow::Slot>& saveSlots, boo
     emit busyChanged(true);
     pump();
     return true;
+}
+
+bool HwSaveController::start(const std::vector<HwSaveFlow::Slot>& saveSlots, bool all,
+                             const std::array<bool, 3>& rgbRequired){
+    if(active_ || !device_ || !device_->begin()) return false;
+    active_ = true; uncertain_ = false; rgbRequired_ = rgbRequired;
+    names_ = std::array<QString, 3>();
+    for(const HwSaveFlow::Slot& slot : saveSlots)
+        if(slot.mode >= 1 && slot.mode <= 3) names_[slot.mode - 1] = QString::fromStdString(slot.name);
+    clock_.start();
+    if(!flow_.start(saveSlots, all, clock_.elapsed())){
+        device_->end(); active_ = false; return false;
+    }
+    return begin(tr("Hardware save"), tr("Checking hardware slots…"));
+}
+
+bool HwSaveController::startErase(unsigned mode, const std::string& line){
+    if(active_ || !device_ || !device_->begin()) return false;
+    active_ = true; uncertain_ = false; rgbRequired_ = {{false, false, false}};
+    clock_.start();
+    if(!flow_.start_erase(mode, line, clock_.elapsed())){
+        device_->end(); active_ = false; return false;
+    }
+    return begin(tr("Erase hardware slot"), tr("M%1: erasing\u2026").arg(mode));
 }
 
 void HwSaveController::sendRefresh(const std::string& line){
@@ -124,11 +141,16 @@ void HwSaveController::showDialog(const HwSaveFlow::Event& event){
     // while opening a modal message box can put it *above* the confirmation
     // on some window managers, making Yes/Cancel appear inaccessible.
     const bool resumeProgress = progress_ && progress_->isVisible();
-    if(resumeProgress) progress_->hide();
+    const int progressValue = progress_ ? progress_->value() : -1;
+    // reset() also stops the delayed show. Hiding a window that is not yet
+    // visible leaves its minimum-duration timer free to cover the question.
+    if(progress_){
+        progress_->hide();
+        progress_->reset();
+    }
     const QString detail = QString::fromStdString(event.text).replace(';', "\n");
     if(event.dialog == HwSaveFlow::Confirm){
-        const auto answer = QMessageBox::warning(parent_, tr("Save to hardware"),
-            tr("Review the affected slot(s):\n%1\nContinue with the hardware write?").arg(detail),
+        const auto answer = QMessageBox::warning(parent_, tr("Save to hardware"), warningText(event.text, names_),
             QMessageBox::Cancel | QMessageBox::Yes, QMessageBox::Cancel);
         flow_.choose(event.id, answer == QMessageBox::Yes, clock_.elapsed());
     } else if(event.dialog == HwSaveFlow::Failed){
@@ -143,7 +165,42 @@ void HwSaveController::showDialog(const HwSaveFlow::Event& event){
         flow_.choose(event.id, false, clock_.elapsed());
         if(progress_) progress_->setLabelText(tr("Waiting for the pending daemon reply…"));
     }
-    if(resumeProgress && progress_ && flow_.busy()) progress_->show();
+    if(progress_ && flow_.busy()){
+        progress_->setValue(progressValue);
+        if(resumeProgress) progress_->show();
+    }
+}
+
+QString HwSaveController::warningText(const std::string& words, const std::array<QString, 3>& names){
+    // "mode N:<word>,<word>,;" for each slot, then the words of the slot of Save slot alone ("recovery-required;"): one block for
+    // each slot, its sentences in the order of the words
+    QList<unsigned> order;
+    std::array<QStringList, 3> sentences;
+    unsigned last = 0;
+    for(const QString& entry : QString::fromStdString(words).split(';', Qt::SkipEmptyParts)){
+        unsigned mode = last;
+        QString list = entry;
+        if(entry.startsWith("mode ")){
+            const int colon = entry.indexOf(':');
+            bool ok = false;
+            mode = colon < 0 ? 0 : entry.mid(5, colon - 5).toUInt(&ok);
+            if(!ok || mode < 1 || mode > 3) continue;
+            list = entry.mid(colon + 1);
+            last = mode;
+        }
+        if(mode < 1 || mode > 3) continue;
+        QStringList& out = sentences[mode - 1];
+        if(!order.contains(mode)) order << mode;
+        for(const QString& word : list.split(',', Qt::SkipEmptyParts)){
+            if(word == "recovery-required") out << tr("an earlier save of it did not finish: it is written again.");
+            else if(word == "create-new") out << tr("it is empty: saving creates a new hardware profile in it.");
+            else out << word;
+        }
+    }
+    QStringList blocks;
+    for(unsigned mode : order)
+        blocks << tr("M%1 \"%2\": ").arg(mode).arg(names[mode - 1]) + sentences[mode - 1].join(' ');
+    return tr("Review the slots to save:\n\n%1\nContinue with the hardware write?").arg(blocks.join("\n\n") + "\n");
 }
 
 QString HwSaveController::meaning(const HwSaveFlow::Outcome& outcome){
@@ -161,6 +218,10 @@ QString HwSaveController::meaning(const HwSaveFlow::Outcome& outcome){
         }
         return QString();
     }
+    if(word == "erased") return tr("The slot is empty on the keyboard.");
+    if(word == "not-erased") return tr("It changed on the keyboard since it was read: nothing was written.");
+    if(word == "erase-failed") return tr("The slot may be empty or as it was: it is read again from the keyboard.");
+    if(word == "disabled") return tr("Erasing a hardware slot is disabled in this build: nothing was sent.");
     if(word == "written") return tr("Saved and read back: the keyboard holds what the editor shows.");
     if(word == "unchanged") return tr("No change found: not written again.");
     if(word == "empty") return tr("Empty on the keyboard: Save ALL does not create a slot, Save slot does.");
@@ -182,9 +243,15 @@ void HwSaveController::finish(const QString& reason){
     emit busyChanged(false);
     QStringList lines;
     for(const auto& outcome : flow_.outcomes()){
-        lines << tr("M%1: %2").arg(outcome.mode).arg(QString::fromStdString(HwSaveFlow::outcome_text(outcome)));
+        // The verdict, what it means under it, and for a slot the daemon refused, its reason under that
+        if(outcome.verdict == "erased") lines << tr("M%1: erased").arg(outcome.mode);
+        else if(outcome.verdict == "not-erased" || outcome.verdict == "disabled") lines << tr("M%1: not erased").arg(outcome.mode);
+        else if(outcome.verdict == "erase-failed") lines << tr("M%1: erase failed").arg(outcome.mode);
+        else if(outcome.verdict == "refused") lines << tr("M%1: refused").arg(outcome.mode);
+        else lines << tr("M%1: %2").arg(outcome.mode).arg(QString::fromStdString(HwSaveFlow::outcome_text(outcome)));
         const QString what = meaning(outcome);
         if(!what.isEmpty()) lines << "    " + what;
+        if(outcome.verdict == "refused" && !outcome.detail.empty()) lines << "    " + QString::fromStdString(outcome.detail);
     }
     if(flow_.check_only())
         lines << tr("Saving to hardware is disabled in this build: the slots were only checked.");
@@ -199,7 +266,8 @@ void HwSaveController::finish(const QString& reason){
                     "disconnect the keyboard and connect it again (or restart ckb-next) to read it again, and you will be "
                     "asked whether to reload a slot that differs or keep your edits.");
     if(reason == "device-gone") lines << tr("Device disconnected.");
-    if(!lines.isEmpty()) QMessageBox::information(parent_, tr("Save result"), lines.join('\n'));
+    if(!lines.isEmpty())
+        QMessageBox::information(parent_, flow_.erasing() ? tr("Erase result") : tr("Save result"), lines.join('\n'));
 }
 
 void HwSaveController::pump(){
@@ -224,6 +292,16 @@ void HwSaveController::pump(){
                     // The checks read the slots first (their own bar), then a save starts it again with its phases
                     progress_->setLabelText(event.text == "check" ? tr("M%1: checking (reading the slot)\u2026").arg(event.mode) :
                                             tr("M%1: %2").arg(event.mode).arg(QString::fromStdString(event.text)));
+                }
+            } else if(event.kind == HwSaveFlow::Refresh && flow_.erasing()){
+                // The erased slot read back (empty), or read again after a failed erase
+                const HwSaveFlow::Outcome& o = flow_.outcomes().front();
+                std::string request;
+                if(!device_ || !device_->refreshAfterErase(o.mode, o.verdict == "erased", request)){
+                    flow_.refresh_result(false);
+                } else {
+                    if(progress_) progress_->setLabelText(tr("Reading M%1 from the keyboard\u2026").arg(o.mode));
+                    sendRefresh(request);
                 }
             } else if(event.kind == HwSaveFlow::Refresh){
                 unsigned mask = 0, rgbRequired = 0;

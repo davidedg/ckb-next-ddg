@@ -193,7 +193,7 @@ static void _cmd_get(usbdevice* kb, usbmode* mode, int nnumber, const char* sett
         nprintf(kb, nnumber, mode, "hwrgb %s\n", rgb);
         free(rgb);
         return;
-    } else if(!strncmp(setting, ":hwbind:", 8)){
+    } else if(!strncmp(setting, ":hwslot:", 8)){
         // K95 RGB Platinum, hwslot: a page of the record of a slot, from the daemon's copy of it (profile_cape.h); no USB
         if(USES_CAPE_FS(kb))
             cmd_get_hwbind_cape(kb, nnumber, setting);

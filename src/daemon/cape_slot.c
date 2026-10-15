@@ -81,6 +81,7 @@ void cape_slot_image_free(cape_slot_image* img){
     cape_slot_files_free(&img->files);
     cape_slot_files_free(&img->light_files);
     cape_binding_free(&img->bind);
+    cape_profile_free(&img->model);
 }
 
 #if defined(__GNUC__)
@@ -371,6 +372,145 @@ int cape_slot_image_from_files(const cape_slot_files* files, const cape_slotid* 
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Reading a slot from its PROFILE.ZIP
+
+// A file as a reading found it: st 0 read (data, len), 1 it does not exist, 2 it is larger than it can be
+typedef struct {
+    const uint8_t* data;
+    size_t len;
+    int st;
+} got_file;
+
+// The rest of an image of a slot in use (present, id) from its PROFILE.I, its PROFILE.ZIP and the total size of its files. What is
+// wrong with them is a state of the image (refused, zip); only memory that runs out is an error (CAPE_E_CAP).
+static int image_from_zip(cape_slot_image* img, got_file info, got_file zip, uint64_t bytes, int layout){
+    img->from_zip = 1;
+    img->bytes = bytes;
+    img->layout = layout;
+    // PROFILE.I: without a valid one the slot cannot be rewritten (as for cape_slot_read), and the ZIP is not looked at
+    int rc;
+    if(info.st != 0){
+        refuse(img, info.st == 1 ? "PROFILE.I does not exist" : "PROFILE.I is larger than expected");
+        return CAPE_OK;
+    }
+    if(info.len > CAPE_SLOT_INFO_CAP || (rc = cape_info_parse(info.data, info.len, &img->info)) != CAPE_OK){
+        refuse(img, "PROFILE.I is not valid (%s)", cape_strerror(info.len > CAPE_SLOT_INFO_CAP ? CAPE_E_SIZE : rc));
+        return CAPE_OK;
+    }
+    img->info_ok = 1;
+    cape_light_indicators(&img->info, img->light.ind);
+    img->light.ind_ok = 1;
+    if(cape_slot_files_add(&img->files, CAPE_FILE_INFO, info.data, info.len) != CAPE_OK)
+        return CAPE_E_CAP;
+
+    // The ZIP and its model
+    char why[CAPE_PROFILE_WHY] = "";
+    if(zip.st != 0){
+        img->zip = zip.st == 1 ? CAPE_ZIP_NONE : CAPE_ZIP_CORRUPT;
+        refuse(img, zip.st == 1 ? "the slot has no PROFILE.ZIP" : "its PROFILE.ZIP is larger than one can be");
+        return CAPE_OK;
+    }
+    rc = cape_zipslot_model(zip.data, zip.len, &img->model, why);
+    if(rc == CAPE_E_CAP)
+        return rc;
+    if(rc != CAPE_OK){
+        img->zip = rc == CAPE_PROFILE_E_UNKNOWN ? CAPE_ZIP_UNKNOWN : CAPE_ZIP_CORRUPT;
+        refuse(img, rc == CAPE_PROFILE_E_UNKNOWN ? "its PROFILE.ZIP is of an unsupported iCUE (%s)" : "its PROFILE.ZIP cannot be read (%s)",
+               why);
+        return CAPE_OK;
+    }
+    // The files it makes
+    cape_slot_files made;
+    cape_compile_lighting* lt = malloc(sizeof(*lt));
+    if(!lt)
+        return CAPE_E_CAP;
+    rc = cape_zipslot_files(&img->model, layout, info.data, info.len, &made, lt, why);
+    if(rc == CAPE_OK){
+        img->made_bytes = cape_zipslot_bytes(&made, lt, zip.len);
+        if(img->made_bytes != bytes)
+            img->zip = CAPE_ZIP_STALE;
+        // The image of those files, as cape_slot_read() reads it (the warnings of PROFILE.I counted once, there)
+        cape_slot_files_free(&img->files);
+        img->info_ok = 0;
+        img->warnings = 0;
+        rc = read_slot(memory_get, &made, img);
+        if(rc == CAPE_OK && cape_slot_files_add(&img->files, CAPE_FILE_ZIP, zip.data, zip.len) != CAPE_OK)
+            rc = CAPE_E_CAP;
+    } else if(rc != CAPE_E_CAP){
+        img->zip = CAPE_ZIP_UNCOMPILABLE;
+        refuse(img, "its PROFILE.ZIP holds content that cannot be stored on the keyboard");
+        if(snprintf(img->detail, sizeof(img->detail), "%s: %s", cape_compile_strerror(rc), why) >= (int)sizeof(img->detail))
+            img->detail[sizeof(img->detail) - 1] = '\0';   // (cut short: it is only for the log)
+        cape_profile_free(&img->model);
+        rc = CAPE_OK;
+    }
+    cape_slot_files_free(&made);
+    free(lt);
+    return rc;
+}
+
+int cape_slot_read_zip(cape_session* s, unsigned slot, cape_slot_image* out){
+    if(!out)
+        return CAPE_E_ARG;
+    image_init(out, NULL);
+    if(!s)
+        return CAPE_E_ARG;
+    if(slot >= CAPE_SLOTS)
+        return CAPE_E_RANGE;
+    const unsigned tx0 = s->tx_packets;
+    out->id = s->slots[slot];
+    out->from_zip = 1;
+    out->layout = s->layout;
+    if(cape_slotid_is_empty(&out->id))
+        return CAPE_OK;
+    out->present = 1;
+    cape_session_progress_expect(s, 2);   // PROFILE.I and PROFILE.ZIP
+    uint8_t* ibuf = malloc(CAPE_SLOT_INFO_CAP);
+    uint8_t* zbuf = malloc(CAPE_MAX_FILE_SIZE);
+    int rc = ibuf && zbuf ? CAPE_OK : CAPE_E_CAP;
+    session_ctx c = { s, slot };
+    size_t il = 0, zl = 0;
+    uint32_t bytes = 0;
+    int ist = 0, zst = 0;
+    if(rc == CAPE_OK && (ist = session_get(&c, CAPE_FILE_INFO, ibuf, CAPE_SLOT_INFO_CAP, &il)) < 0)
+        rc = ist;
+    if(rc == CAPE_OK)
+        rc = cape_slot_bytes(s, slot, &bytes);
+    if(rc == CAPE_OK && (zst = session_get(&c, CAPE_FILE_ZIP, zbuf, CAPE_MAX_FILE_SIZE, &zl)) < 0)
+        rc = zst;
+    if(rc == CAPE_OK){
+        const got_file info = { ist == 0 ? ibuf : NULL, il, ist };
+        const got_file zip = { zst == 0 ? zbuf : NULL, zl, zst };
+        rc = image_from_zip(out, info, zip, bytes, s->layout);
+    }
+    free(ibuf);
+    free(zbuf);
+    out->packets = s->tx_packets - tx0;
+    return rc;
+}
+
+int cape_slot_image_from_zip_files(const cape_slot_files* files, const cape_slotid* id, int layout, cape_slot_image* out){
+    if(!out)
+        return CAPE_E_ARG;
+    image_init(out, id);
+    out->from_zip = 1;
+    out->layout = layout;
+    if(!files || !id)
+        return CAPE_E_ARG;
+    if(cape_slotid_is_empty(id))
+        return CAPE_OK;
+    out->present = 1;
+    const cape_slot_file* i = cape_slot_files_find(files, CAPE_FILE_INFO);
+    const cape_slot_file* z = cape_slot_files_find(files, CAPE_FILE_ZIP);
+    uint64_t bytes = 0;
+    for(size_t f = 0; f < files->n; f++)
+        bytes += files->file[f].len;
+    const got_file info = { i ? i->data : NULL, i ? i->len : 0, i ? 0 : 1 };
+    const got_file zip = { z ? z->data : NULL, z ? z->len : 0, z ? 0 : 1 };
+    return image_from_zip(out, info, zip, bytes, layout);
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // The plan
 
 static int is_high_surrogate(uint16_t u){
@@ -483,12 +623,179 @@ static int kept_lighting(const cape_slot_image* old, cape_light_file* out){
     return (int)n;
 }
 
+// The files with PROFILE.ZIP put after PROFILE.MAP, where iCUE writes it
+static int insert_zip(cape_slot_files* f, const uint8_t* zip, size_t len){
+    cape_slot_files g;
+    memset(&g, 0, sizeof(g));
+    int rc = CAPE_OK;
+    for(size_t i = 0; i < f->n && rc == CAPE_OK; i++){
+        rc = cape_slot_files_add(&g, f->file[i].name, f->file[i].data, f->file[i].len);
+        if(rc == CAPE_OK && !strcmp(f->file[i].name, CAPE_FILE_MAP))
+            rc = cape_slot_files_add(&g, CAPE_FILE_ZIP, zip, len);
+    }
+    if(rc == CAPE_OK && !cape_slot_files_find(&g, CAPE_FILE_ZIP))
+        rc = CAPE_E_ARG;
+    if(rc != CAPE_OK){
+        cape_slot_files_free(&g);
+        return rc;
+    }
+    cape_slot_files_free(f);
+    *f = g;
+    return CAPE_OK;
+}
+
+// The concordance of a ZIP made for files: read back, it is the model m, and the files it makes are exactly files (no more, no fewer,
+// byte for byte; PROFILE.I with its indicator colours). Returns 1, or 0 with why.
+static int zip_concordant(const uint8_t* zip, size_t len, const cape_profile_profile* m, const cape_slot_files* files, int layout,
+                          char* why, size_t cap){
+    char detail[CAPE_PROFILE_WHY] = "";
+    cape_profile_profile back;
+    int rc = cape_zipslot_model(zip, len, &back, detail);
+    if(rc != CAPE_OK){
+        put_reason(why, cap, "the PROFILE.ZIP made is not read back (%s)", detail);
+        return 0;
+    }
+    int ok = cape_profile_equal(&back, m) == 1;
+    if(!ok)
+        put_reason(why, cap, "the PROFILE.ZIP made is read back as another model");
+    const cape_slot_file* info = cape_slot_files_find(files, CAPE_FILE_INFO);
+    cape_slot_files made;
+    memset(&made, 0, sizeof(made));
+    cape_compile_lighting* lt = malloc(sizeof(*lt));
+    if(ok && (!info || !lt)){
+        put_reason(why, cap, info ? "out of memory" : "there is no PROFILE.I");
+        ok = 0;
+    }
+    if(ok && (rc = cape_zipslot_files(&back, layout, info->data, info->len, &made, lt, detail)) != CAPE_OK){
+        put_reason(why, cap, "the PROFILE.ZIP made does not make files (%s)", detail);
+        ok = 0;
+    }
+    for(size_t i = 0; ok && i < files->n; i++){
+        const cape_slot_file* x = cape_slot_files_find(&made, files->file[i].name);
+        if(!x || x->len != files->file[i].len || memcmp(x->data, files->file[i].data, x->len)){
+            put_reason(why, cap, "the PROFILE.ZIP made does not make %s as it is to be written", files->file[i].name);
+            ok = 0;
+        }
+    }
+    if(ok && made.n != files->n){
+        put_reason(why, cap, "the PROFILE.ZIP made makes files that are not to be written");
+        ok = 0;
+    }
+    cape_slot_files_free(&made);
+    free(lt);
+    cape_profile_free(&back);
+    return ok;
+}
+
+// The identities of a plan, made of its seed: the n-th one is the same for the same seed (splitmix64 of the seed and n)
+typedef struct {
+    uint64_t a, b;
+    uint64_t n;
+} id_source;
+
+static uint64_t splitmix64(uint64_t x){
+    x += 0x9e3779b97f4a7c15ull;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+    return x ^ (x >> 31);
+}
+
+static void id_next(void* ctx, uint8_t out[16]){
+    id_source* s = ctx;
+    const uint64_t hi = splitmix64(s->a ^ splitmix64(2 * s->n));
+    const uint64_t lo = splitmix64(s->b ^ splitmix64(2 * s->n + 1));
+    s->n++;
+    for(int i = 0; i < 8; i++){
+        out[i] = (uint8_t)(hi >> (8 * i));
+        out[8 + i] = (uint8_t)(lo >> (8 * i));
+    }
+}
+
+// The model and the ZIP of the files of a plan of a slot read from its ZIP (verdict WRITE or NEW, files in iCUE's order): the files
+// imported with the slot's model as the base, the verdict SAME if nothing at all changes, else the ZIP put into the files after the
+// concordance. A failure is a refusal of the plan, with files freed.
+static void plan_zip(const cape_slot_image* old, const cape_slot_edit* edit, cape_slot_plan* plan, cape_slot_files* files, int files_same){
+    char why[CAPE_PROFILE_WHY] = "";
+    cape_compile_import_opts o;
+    memset(&o, 0, sizeof(o));
+    o.layout = old->layout;
+    id_source ids = { 0, 0, 0 };
+    if(edit->seed){
+        for(int i = 0; i < 8; i++){
+            ids.a |= (uint64_t)edit->seed[i] << (8 * i);
+            ids.b |= (uint64_t)edit->seed[8 + i] << (8 * i);
+        }
+        o.random = id_next;
+        o.random_ctx = &ids;
+    }
+    o.lighting = edit->lighting;
+    o.hold = edit->hold;
+    o.nhold = edit->nhold;
+    cape_profile_profile m;
+    int rc = cape_compile_import(files, old->present ? &old->model : NULL, &o, &m, why);
+    uint8_t* zip = NULL;
+    size_t zlen = 0;
+    if(rc != CAPE_OK){
+        plan->verdict = CAPE_SLOT_REFUSED;
+        put_reason(plan->reason, sizeof(plan->reason), "the profile cannot be made one of iCUE (%s%s%s)", cape_compile_strerror(rc),
+                   why[0] ? ": " : "", why);
+        goto done;
+    }
+    // (a comparison that could not be made is not a change: out of memory, the plan stops there)
+    const int equal = old->present ? cape_profile_equal(&old->model, &m) : 0;
+    if(equal < 0){
+        plan->verdict = CAPE_SLOT_REFUSED;
+        put_reason(plan->reason, sizeof(plan->reason), "the profile cannot be compared with the slot's (%s)", cape_compile_strerror(equal));
+        goto done;
+    }
+    plan->model_changed = equal != 1;
+    if(!edit->lighting && !plan->keeps_lighting && old->present){
+        // Replacing the lighting also discards disabled layers kept only in the ZIP.
+        plan->effect_layers = 0;
+        for(uint32_t l = 0; l < old->model.nlayers; l++){
+            if(old->model.layers[l].effect.kind == CAPE_PROFILE_STATIC)
+                plan->replaces |= CAPE_REPLACES_LAYERS;
+            else {
+                plan->replaces |= CAPE_REPLACES_EFFECTS;
+                plan->effect_layers++;
+            }
+        }
+    }
+    if(files_same && !plan->model_changed && old->zip == CAPE_ZIP_OK && !edit->force){
+        plan->verdict = CAPE_SLOT_SAME;
+        goto done;
+    }
+    rc = cape_zipslot_zip(&m, &zip, &zlen, why);
+    if(rc != CAPE_OK){
+        plan->verdict = CAPE_SLOT_REFUSED;
+        put_reason(plan->reason, sizeof(plan->reason), "the profile does not fit in a PROFILE.ZIP (%s%s%s)", cape_compile_strerror(rc),
+                   why[0] ? ": " : "", why);
+        goto done;
+    }
+    // Nothing is written that the daemon would not read back as written: the ZIP must make these files, and only these
+    char cwhy[CAPE_SLOT_WHY];
+    if(!zip_concordant(zip, zlen, &m, files, old->layout, cwhy, sizeof(cwhy))){
+        plan->verdict = CAPE_SLOT_REFUSED;
+        put_reason(plan->reason, sizeof(plan->reason), "a fault of the daemon: %s", cwhy);
+        goto done;
+    }
+    if((rc = insert_zip(files, zip, zlen)) != CAPE_OK){
+        plan->verdict = CAPE_SLOT_REFUSED;
+        put_reason(plan->reason, sizeof(plan->reason), "the files of the slot do not fit together (%s)", cape_strerror(rc));
+    }
+done:
+    if(plan->verdict != CAPE_SLOT_WRITE && plan->verdict != CAPE_SLOT_NEW)
+        cape_slot_files_free(files);
+    free(zip);
+    cape_profile_free(&m);
+}
+
 static int same_id(const cape_slotid* a, const cape_slotid* b){
-    return !memcmp(a->guid, b->guid, sizeof(a->guid)) && a->cookie == b->cookie && !memcmp(a->flags, b->flags, sizeof(a->flags));
+    return !memcmp(a->guid, b->guid, sizeof(a->guid)) && a->cookie == b->cookie && a->flag == b->flag;
 }
 
 int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit, cape_slot_plan* plan, cape_slot_files* out){
-    if(!old || !edit || !plan || (!edit->light_keep && (!edit->r || !edit->g || !edit->b)))
+    if(!old || !edit || !plan || (!edit->light_keep && !edit->lighting && (!edit->r || !edit->g || !edit->b)))
         return CAPE_E_ARG;
     memset(plan, 0, sizeof(*plan));
     if(out)
@@ -497,7 +804,36 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
     cape_light_pack_result pk;
     memset(&pk, 0, sizeof(pk));
     int prc = CAPE_OK;
-    if(!edit->light_keep){
+    cape_compile_lighting typed;
+    memset(&typed, 0, sizeof(typed));
+    int same_lighting = 0;
+    if(edit->lighting){
+        if(old->present && old->refused){
+            snprintf(plan->reason, sizeof(plan->reason), "%s", old->reason);
+            return CAPE_OK;
+        }
+        if(!old->from_zip || !edit->lighting->known || edit->light_keep){
+            snprintf(plan->reason, sizeof(plan->reason), "typed lighting requires a known ZIP model and light:model");
+            return CAPE_OK;
+        }
+        cape_profile_profile wanted = {0}, previous = {0};
+        wanted.layers = edit->lighting->layers; wanted.nlayers = edit->lighting->count;
+        previous.layers = old->model.layers; previous.nlayers = old->model.nlayers;
+        same_lighting = old->present && cape_profile_equal(&wanted, &previous) == 1;
+        wanted.side_lighting = old->present ? old->model.side_lighting : 1;
+        char why[CAPE_PROFILE_WHY] = "";
+        const int rc = cape_compile_lighting_build(&wanted, old->layout, &typed, why);
+        if(rc != CAPE_OK){
+            put_reason(plan->reason, sizeof(plan->reason), "the lighting cannot be compiled (%s%s%s)",
+                       cape_compile_strerror(rc), why[0] ? ": " : "", why);
+            return CAPE_OK;
+        }
+        plan->layers = wanted.nlayers;
+        plan->active = typed.layers;
+    } else if(edit->light_keep && old->from_zip){
+        plan->layers = old->model.nlayers;
+        for(uint32_t i = 0; i < old->model.nlayers; ++i) plan->active += old->model.layers[i].enabled != 0;
+    } else if(!edit->light_keep){
         prc = cape_light_pack_ordered(edit->r, edit->g, edit->b, edit->leds, edit->order, edit->norder, &pk);
         if(prc != CAPE_OK && prc != CAPE_LIGHT_E_COLOURS)
             return prc;
@@ -514,6 +850,13 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
     // The slot must be the one the edit was made on (after a save that failed: the one it was before, which the copy kept then is)
     if(edit->base && !same_id(&old->id, edit->base)){
         snprintf(plan->reason, sizeof(plan->reason), "the slot is not the one the edit was made on: it changed since it was read");
+        return CAPE_OK;
+    }
+    // A slot read from its ZIP is saved with one, made of iCUE's model: what the model cannot say is not written
+    const int zip = old->from_zip;
+    int files_same = 0;   // the files to write are the slot's (then only the model can make it a write)
+    if(zip && edit->has_winlock && (edit->winlock & 0xf0)){
+        put_reason(plan->reason, sizeof(plan->reason), "Win Lock options %02x: iCUE has none in bits 4 to 7", edit->winlock);
         return CAPE_OK;
     }
     // The performance settings to write: the edit's, else the slot's, else iCUE's defaults (a new profile, a PROFILE.DAT or
@@ -577,7 +920,9 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
                 }
                 plan->bindings_changed = !(bind_model && cape_binding_equal(&old->bind, nb));
             }
-            if(edit->light_keep){
+            if(edit->lighting){
+                files_same = same_lighting && !plan->name_changed && !plan->bindings_changed && !perf_changed && !edit->nhold;
+            } else if(edit->light_keep){
                 // The lighting as it is, whatever it is, if all its files were read
                 nkept = old->light.complete ? kept_lighting(old, kept) : -1;
                 if(nkept <= 0){
@@ -587,8 +932,9 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
                     return CAPE_OK;
                 }
                 plan->keeps_lighting = 1;
-                plan->layers = old->light.layers;
-                if(!plan->name_changed && !plan->bindings_changed && !perf_changed && !edit->force){
+                plan->layers = zip ? old->model.nlayers : old->light.layers;
+                files_same = !plan->name_changed && !plan->bindings_changed && !perf_changed;
+                if(files_same && !edit->force && !zip){
                     plan->verdict = CAPE_SLOT_SAME;
                     return CAPE_OK;
                 }
@@ -608,14 +954,16 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
                 // The picture is the slot's own: nothing to write if the name and the bindings are too (unless the caller wants it written
                 // again), else the lighting stays as it is
                 if(same_picture(&old->light, edit)){
-                    if(!plan->name_changed && !plan->bindings_changed && !perf_changed && !edit->force){
+                    files_same = !plan->name_changed && !plan->bindings_changed && !perf_changed;
+                    if(files_same && !edit->force && !zip){
                         plan->verdict = CAPE_SLOT_SAME;
                         return CAPE_OK;
                     }
                     nkept = kept_lighting(old, kept);
                     plan->keeps_lighting = nkept > 0;
                     if(nkept > 0)
-                        plan->layers = old->light.layers;
+                        plan->layers = zip ? old->model.nlayers : old->light.layers;
+                    files_same = files_same && plan->keeps_lighting;
                 }
             }
         }
@@ -634,9 +982,8 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
         dat_file = cape_slot_files_find(&old->files, CAPE_FILE_DAT);
         map_file = cape_slot_files_find(&old->files, CAPE_FILE_MAP);
         plan->id = old->id;
-        plan->id.cookie = (uint16_t)(old->id.cookie + 1);
-        plan->id.flags[0] = 0x00;
-        plan->id.flags[1] = 0x01;
+        plan->id.cookie = cape_cookie_next(old->id.cookie);
+        plan->id.flag = CAPE_SLOTID_FLAG;
         plan->verdict = CAPE_SLOT_WRITE;
     } else {
         // An empty slot: a profile as iCUE makes a new one, DAT and MAP without entries and PROFILE.I with its defaults
@@ -668,8 +1015,7 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
         }
         memcpy(plan->id.guid, edit->guid, sizeof(plan->id.guid));
         plan->id.cookie = 0;
-        plan->id.flags[0] = 0x00;
-        plan->id.flags[1] = 0x01;
+        plan->id.flag = CAPE_SLOTID_FLAG;
         plan->verdict = CAPE_SLOT_NEW;
     }
     if(plan->name_changed && cape_info_set_name(&info, edit->name, nedit) != CAPE_OK){
@@ -690,7 +1036,10 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
     cape_light_file built[CAPE_LIGHT_FILES_MAX];
     const cape_light_file* light = kept;
     size_t nlight = nkept > 0 ? (size_t)nkept : 0;
-    if(!plan->keeps_lighting){
+    if(edit->lighting){
+        light = typed.file;
+        nlight = typed.nfiles;
+    } else if(!plan->keeps_lighting){
         if(cape_light_files_build(&pk, built, CAPE_LIGHT_FILES_MAX, &nlight) != CAPE_OK){
             plan->verdict = CAPE_SLOT_REFUSED;
             snprintf(plan->reason, sizeof(plan->reason), "the lighting files cannot be built");
@@ -715,7 +1064,11 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
         dat_file = cape_slot_files_find(&bound, CAPE_FILE_DAT);
         map_file = cape_slot_files_find(&bound, CAPE_FILE_MAP);
     }
-    if(out){
+    // A plan of a slot read from its ZIP is made with its files also when it is only a check: they make the model
+    cape_slot_files local;
+    memset(&local, 0, sizeof(local));
+    cape_slot_files* target = out ? out : zip ? &local : NULL;
+    if(target){
         // The one PROFILE.DAT written, whichever it is (the slot's, one built from the bindings, a new one), has the Win Lock options
         // to write in its byte 1: a DAT kept as it is changes in that byte only
         const uint8_t* dat = dat_file ? dat_file->data : dat_new;
@@ -730,15 +1083,18 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
         memcpy(dat_out, dat, dat_len);
         if(dat_len >= 2)
             dat_out[1] = wl_new;
-        const int rc = assemble(out, macros, dat_out, dat_len, info_bytes,
+        const int rc = assemble(target, macros, dat_out, dat_len, info_bytes,
                                 sizeof(info_bytes), map_file ? map_file->data : map_new, map_file ? map_file->len : sizeof(map_new), light, nlight);
         free(dat_out);
         if(rc != CAPE_OK){
-            cape_slot_files_free(out);
+            cape_slot_files_free(target);
             plan->verdict = CAPE_SLOT_REFUSED;
             snprintf(plan->reason, sizeof(plan->reason), "the files of the slot do not fit together (%s)", cape_strerror(rc));
         }
     }
     cape_slot_files_free(&bound);
+    if(zip && target && (plan->verdict == CAPE_SLOT_WRITE || plan->verdict == CAPE_SLOT_NEW))
+        plan_zip(old, edit, plan, target, files_same);
+    cape_slot_files_free(&local);
     return CAPE_OK;
 }

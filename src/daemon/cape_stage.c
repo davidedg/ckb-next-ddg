@@ -5,8 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-// The order of the words of a transaction (cape_hwslot.h, section 2)
-enum { PH_BEGIN = 0, PH_NAME, PH_LIGHT, PH_RGB, PH_WL, PH_IND, PH_BIND, PH_MAP, PH_ACT, PH_END };
+// The order of the words of a transaction (cape_hwslot.h)
+enum { PH_BEGIN = 0, PH_NAME, PH_LIGHT, PH_MODEL, PH_WL, PH_IND, PH_BIND, PH_MAP, PH_ACT, PH_END };
 
 // A sanity bound on what one transaction may carry (the limits of an edit are cape_binding_check's, at check:): 64 macro files as
 // large as the daemon reads one, 16 MiB, far above what a slot holds (the flash has 2038 sectors of 4 KiB)
@@ -14,19 +14,24 @@ enum { PH_BEGIN = 0, PH_NAME, PH_LIGHT, PH_RGB, PH_WL, PH_IND, PH_BIND, PH_MAP, 
 #define STAGE_BYTES_MAX    ((size_t)64 * CAPE_MAX_FILE_SIZE)
 
 static void txn_clear(cape_stage_txn* t){
+    cape_hwsave_prepared_free(&t->prepared);
     cape_binding_free(&t->model);
-    free(t->rgb);
+    cape_lightmodel_free(&t->lighting);
+    cape_lightmodel_reader_free(t->lighting_reader);
     free(t->act_ev);
     memset(t, 0, sizeof(*t));
     t->act_key = -1;
+    t->im_key = -1;
 }
 
 void cape_stage_init(cape_stage* st){
     if(!st)
         return;
     memset(st, 0, sizeof(*st));
-    for(unsigned i = 0; i < CAPE_STAGE_SLOTS; i++)
+    for(unsigned i = 0; i < CAPE_STAGE_SLOTS; i++){
         st->slot[i].act_key = -1;
+        st->slot[i].im_key = -1;
+    }
 }
 
 void cape_stage_free(cape_stage* st){
@@ -134,6 +139,9 @@ static void act_done(cape_stage_txn* t){
     if(cape_binding_set_macro(&t->model, (unsigned)t->act_key, t->act_sub, t->act_start, t->act_run, t->act_rep, t->act_ev, t->act_need)
        != CAPE_OK)
         fail(t, "out of memory");
+    // im: may follow only the events of iCUE's 'Imitate holding key' on press at its longest: a press, c0 ff ff ff, a release
+    const cape_event* d = t->act_need == 3 ? &t->act_ev[1] : NULL;
+    t->im_key = d && d->b0 == 0xc0 && d->b1 == 0xff && d->b2 == 0xff && d->b3 == 0xff ? t->act_key : -1;
     free(t->act_ev);
     t->act_ev = NULL;
     t->act_key = -1;
@@ -182,62 +190,34 @@ static void w_name(cape_stage_txn* t, const char** f, const size_t* fl, unsigned
     }
 }
 
-static int led_char(char c){
-    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+static int lighting_tag(const char* p, size_t n){
+    static const char* const tags[] = { "lights", "layer", "lname", "select", "key", "run", "effect", "ename", "animation",
+        "curve", "point", "param", "lend" };
+    for(size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); ++i)
+        if(is(p, n, tags[i])) return 1;
+    return 0;
 }
 
-static void w_rgb(cape_stage_txn* t, const char* p, size_t len){
-    phase(t, PH_RGB, "rgb");
-    if(t->failed)
-        return;
-    if(t->light != CAPE_STAGE_LIGHT_PIC){
-        fail(t, "rgb without light:pic");
-        return;
+static void w_lighting(cape_stage_txn* t, const char* word, size_t len, size_t tag_len){
+    phase(t, PH_MODEL, "lighting");
+    if(t->failed) return;
+    if(t->light != CAPE_STAGE_LIGHT_MODEL || !t->lighting_reader || t->lighting.known){
+        fail(t, "lighting without an unfinished light:model"); return;
     }
-    size_t i = 0;
-    for(;;){
-        const char* item = p + i;
-        const char* comma = memchr(item, ',', len - i);
-        const size_t il = comma ? (size_t)(comma - item) : len - i;
-        const char* eq = memchr(item, '=', il);
-        uint32_t rgb;
-        const size_t nl = eq ? (size_t)(eq - item) : 0;
-        if(!eq || nl < 1 || nl >= CAPE_STAGE_LED_NAME || !hex_exact(eq + 1, il - nl - 1, 6, &rgb)){
-            fail(t, "a malformed rgb word");
-            return;
-        }
-        for(size_t k = 0; k < nl; k++)
-            if(!led_char(item[k])){
-                fail(t, "a malformed LED name");
-                return;
-            }
-        cape_stage_rgb e = {{0}, {0}};
-        memcpy(e.led, item, nl);
-        e.rgb[0] = (uint8_t)(rgb >> 16);
-        e.rgb[1] = (uint8_t)(rgb >> 8);
-        e.rgb[2] = (uint8_t)rgb;
-        if(t->nrgb && strcmp(t->rgb[t->nrgb - 1].led, e.led) >= 0){
-            fail(t, "LED %s out of order or twice", e.led);
-            return;
-        }
-        if(!(e.rgb[0] | e.rgb[1] | e.rgb[2])){
-            fail(t, "LED %s is black: a black LED is not listed", e.led);
-            return;
-        }
-        if(t->nrgb == t->rgb_cap){
-            const size_t cap = t->rgb_cap ? t->rgb_cap * 2 : 64;
-            cape_stage_rgb* r = cap <= 4096 ? realloc(t->rgb, cap * sizeof(*r)) : NULL;
-            if(!r){
-                fail(t, "too many LEDs");
-                return;
-            }
-            t->rgb = r;
-            t->rgb_cap = cap;
-        }
-        t->rgb[t->nrgb++] = e;
-        if(!comma)
-            return;
-        i += il + 1;
+    if(len < tag_len + 10){ fail(t, "missing lighting body"); return; }
+    char body[CAPE_HWSLOT_WORD_MAX + 1];
+    memcpy(body, word, tag_len + 1);
+    // Remove exactly the transaction field, retaining the complete body grammar.
+    memcpy(body + tag_len + 1, word + tag_len + 10, len - tag_len - 10);
+    body[len - 9] = 0;
+    if(cape_lightmodel_read_word(t->lighting_reader, body) != CAPE_OK){
+        fail(t, "invalid lighting model"); return;
+    }
+    if(cape_lightmodel_ready(t->lighting_reader)){
+        if(cape_lightmodel_take(t->lighting_reader, &t->lighting) != CAPE_OK || !t->lighting.known)
+            fail(t, "light:model requires known lighting");
+        cape_lightmodel_reader_free(t->lighting_reader);
+        t->lighting_reader = NULL;
     }
 }
 
@@ -293,18 +273,12 @@ static void w_bind(cape_stage_txn* t, const char** f, const size_t* fl, unsigned
         t->bind = CAPE_STAGE_BIND_KEEP;
         return;
     }
-    // bind:<txn>:model[:recreate] (the Win Lock options are the wl: word's, not the bindings')
-    const char* rest = f[2];
-    const size_t rl = fl[2];
-    const char* g[2];
-    size_t gl[2];
-    const unsigned ng = nf == 3 ? fields(rest, rl, g, gl, 2) : 0;
-    if(ng < 1 || !is(g[0], gl[0], "model") || (ng == 2 && !is(g[1], gl[1], "recreate"))){
+    // bind:<txn>:model (the Win Lock options are the wl: word's, not the bindings')
+    if(nf != 3 || !is(f[2], fl[2], "model")){
         fail(t, "a malformed bind word");
         return;
     }
     t->bind = CAPE_STAGE_BIND_MODEL;
-    t->recreate = ng == 2;
     cape_binding_init(&t->model);
 }
 
@@ -340,6 +314,7 @@ static void w_map(cape_stage_txn* t, const char** f, const size_t* fl, unsigned 
 static void w_act(cape_stage_txn* t, const char** f, const size_t* fl, unsigned nf){
     need_no_act(t, "act");
     phase(t, PH_ACT, "act");
+    t->im_key = -1;
     if(t->failed)
         return;   // (and an action whose events are awaited keeps its buffer, freed with the transaction)
     uint32_t k, sub, start, run, rep;
@@ -445,6 +420,28 @@ static void w_ev(cape_stage_txn* t, const char** f, const size_t* fl, unsigned n
         act_done(t);
 }
 
+// im:<txn>:<key>:<ms>, right after the events of the act: of key, once
+static void w_im(cape_stage_txn* t, const char** f, const size_t* fl, unsigned nf){
+    need_no_act(t, "im");
+    phase(t, PH_ACT, "im");
+    if(t->failed)
+        return;
+    uint32_t k;
+    unsigned ms;
+    if(nf != 4 || !key_of(f[2], fl[2], &k) || !dec(f[3], fl[3], 99999000u, &ms) || ms <= 16777215u){
+        fail(t, "a malformed im word");
+        return;
+    }
+    if(t->im_key != (int)k){
+        fail(t, "im of key %02x is not right after the events of an Imitate at the longest delay", (unsigned)k);
+        return;
+    }
+    t->im_key = -1;
+    t->hold[t->nhold].key = (uint8_t)k;
+    t->hold[t->nhold].ms = ms;
+    t->nhold++;
+}
+
 static void w_end(cape_stage_txn* t, const char** f, const size_t* fl, unsigned nf){
     unsigned n;
     need_no_act(t, "end");
@@ -459,6 +456,8 @@ static void w_end(cape_stage_txn* t, const char** f, const size_t* fl, unsigned 
         fail(t, "no light word");
     if(t->bind == CAPE_STAGE_BIND_UNSET)
         fail(t, "no bind word");
+    if(t->light == CAPE_STAGE_LIGHT_MODEL && !t->lighting.known)
+        fail(t, "incomplete lighting model");
     if(n != t->words)
         fail(t, "end says %u words, %u came", n, t->words);
     if(!t->failed)
@@ -530,6 +529,8 @@ cape_stage_request cape_stage_word(cape_stage* st, int owner, const char* word, 
         return CAPE_STAGE_WORD;
     }
     t->words++;
+    if(t->light == CAPE_STAGE_LIGHT_MODEL && !t->lighting.known && !lighting_tag(f[0], fl[0]))
+        fail(t, "incomplete lighting model");
     if(t->complete || t->phase == PH_END)
         fail(t, "%.*s after end", (int)fl[0], f[0]);
     else if(is(f[0], fl[0], "name"))
@@ -541,17 +542,16 @@ cape_stage_request cape_stage_word(cape_stage* st, int owner, const char* word, 
                 fail(t, "light twice");
             else if(nf == 3 && is(f[2], fl[2], "keep"))
                 t->light = CAPE_STAGE_LIGHT_KEEP;
-            else if(nf == 3 && is(f[2], fl[2], "pic"))
-                t->light = CAPE_STAGE_LIGHT_PIC;
+            else if(nf == 3 && is(f[2], fl[2], "model")){
+                t->light = CAPE_STAGE_LIGHT_MODEL;
+                t->lighting_reader = cape_lightmodel_reader_new();
+                if(!t->lighting_reader) fail(t, "out of memory");
+            }
             else
                 fail(t, "a malformed light word");
         }
-    } else if(is(f[0], fl[0], "rgb")){
-        const unsigned n3 = fields(word, len, f, fl, 3);
-        if(n3 != 3)
-            fail(t, "a malformed rgb word");
-        else
-            w_rgb(t, f[2], fl[2]);
+    } else if(lighting_tag(f[0], fl[0])){
+        w_lighting(t, word, len, fl[0]);
     } else if(is(f[0], fl[0], "wl"))
         w_wl(t, f, fl, fields(word, len, f, fl, 3));
     else if(is(f[0], fl[0], "ind"))
@@ -564,6 +564,8 @@ cape_stage_request cape_stage_word(cape_stage* st, int owner, const char* word, 
         w_act(t, f, fl, nf);
     else if(is(f[0], fl[0], "ev"))
         w_ev(t, f, fl, nf);
+    else if(is(f[0], fl[0], "im"))
+        w_im(t, f, fl, nf);
     else
         fail(t, "an unknown word %.*s", (int)fl[0], f[0]);
     return CAPE_STAGE_WORD;

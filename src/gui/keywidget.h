@@ -39,6 +39,8 @@ public:
     void setSelection(const QStringList& keys);
     void selectAll();
     void clearSelection();
+    // Show layer membership without covering the key's colour.
+    void selectionOutline(bool enabled){ _selectionOutline = enabled; update(); }
 
     // Keys that show a colour of their own and cannot be selected (the indicator buttons of a hardware slot of the K95 RGB
     // Platinum, whose colours are the Performance tab's): the ring of an indicator, tip as their tooltip; an empty map: none
@@ -98,6 +100,7 @@ private:
     void pick(const QPointF& at);
 
     QBitArray selection;
+    bool _selectionOutline = false;
     QBitArray newSelection;
     QBitArray animation;
     // These should not be scaled so that the rect renders correctly

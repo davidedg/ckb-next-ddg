@@ -2,22 +2,24 @@
 #define CAPE_STAGE_H
 
 /*
- * The preparation of a save of a K95 RGB Platinum slot (hwslot1, section 2 of cape_hwslot.h): the words of "hwslot" as they come,
+ * The preparation of a save of a K95 RGB Platinum slot (cape_hwslot.h): the words of "hwslot" as they come,
  * checked against the grammar and gathered into one transaction per slot. What the words mean for the slot (the base against the
- * cache, a name for an empty slot, recreate against the state of the bindings, the limits of an edit) is judged by check: and save:,
- * not here. Pure code: nothing here talks to the device.
+ * cache, a name for an empty slot, the limits of an edit, what iCUE's model can hold) is judged by check: and save:, not here. Pure
+ * code: nothing here talks to the device.
  */
 
 #include "cape_hwslot.h"
+#include "cape_compile.h"
+#include "cape_lightmodel.h"
+#include "cape_hwsave.h"
 
 #define CAPE_STAGE_SLOTS     3
 #define CAPE_STAGE_OWNERS    10     // notification nodes 1..9 (OUTFIFO_MAX)
-#define CAPE_STAGE_LED_NAME  16
 
 typedef enum {
     CAPE_STAGE_LIGHT_UNSET = 0,
     CAPE_STAGE_LIGHT_KEEP,
-    CAPE_STAGE_LIGHT_PIC
+    CAPE_STAGE_LIGHT_MODEL
 } cape_stage_light;
 
 typedef enum {
@@ -25,11 +27,6 @@ typedef enum {
     CAPE_STAGE_BIND_KEEP,
     CAPE_STAGE_BIND_MODEL
 } cape_stage_bind;
-
-typedef struct {
-    char led[CAPE_STAGE_LED_NAME];
-    uint8_t rgb[3];
-} cape_stage_rgb;
 
 typedef struct {
     int open;                         // there is a transaction for this slot
@@ -46,15 +43,21 @@ typedef struct {
     uint16_t name[CAPE_INFO_NAME_MAX];
     size_t name_units;
     cape_stage_light light;
-    cape_stage_rgb* rgb;              // the LEDs that are not black, in ascending order of name
-    size_t nrgb;
+    cape_lightmodel lighting;
+    cape_lightmodel_reader* lighting_reader;
     int has_wl;                       // wl: came: the Win Lock options to write
     uint8_t wl;
     int has_ind;                      // ind: came: the indicator colours to write (profile, brightness, lock on, lock off: RGB)
     uint8_t ind[12];
     cape_stage_bind bind;
-    int recreate;
     cape_binding_model model;         // bind:model: the bindings (its Win Lock options are the default and do not count: wl: says)
+    cape_compile_hold hold[CAPE_BIND_K95_KEYS];   // im: the intervals of 'Imitate holding key' longer than their files can say
+    size_t nhold;
+    // what the first check: drew for the transaction, kept for its save: and a Retry (the daemon's: here they are only kept)
+    int drawn;
+    uint8_t seed[CAPE_SLOT_SEED_SIZE];   // the identities of the new actions and layers
+    uint8_t guid[16];                    // the GUID of a new profile
+    cape_hwsave_prepared prepared;    // files and base frozen by a successful Check
     int checked;                      // set by the caller when check: answered (and refused, if it said so)
     int refused;
     char check_reason[CAPE_SLOT_WHY]; // the reason of a refusal of check:, for the save: that follows it
@@ -62,13 +65,13 @@ typedef struct {
     uint8_t name_utf8[1024];
     size_t name_len;
     unsigned name_next, name_total;
-    size_t rgb_cap;
     int last_map, last_act;           // the last key of map: and of act: (ascending order)
     int act_key;                      // the act: whose ev: words are awaited, or -1
     uint8_t act_sub, act_start, act_run, act_rep;
     cape_event* act_ev;
     unsigned act_need, act_have;
     int act_four_next;                // the last ev: word stopped at 126 bytes: the next one starts with an event of 4 bytes
+    int im_key;                       // the key whose act: just got all its events and whose interval im: may give, or -1
     size_t event_bytes;
 } cape_stage_txn;
 
@@ -82,7 +85,7 @@ typedef enum {
     CAPE_STAGE_CHECK,
     CAPE_STAGE_SAVE,
     CAPE_STAGE_ABORT,
-    CAPE_STAGE_MALFORMED              // not a word of hwslot1 at all (no transaction to blame): ignored
+    CAPE_STAGE_MALFORMED              // not a word of hwslot at all (no transaction to blame): ignored
 } cape_stage_request;
 
 void cape_stage_init(cape_stage* st);
