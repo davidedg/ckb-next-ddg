@@ -82,37 +82,39 @@ void KbProfileDialog::on_profileList_itemClicked(QListWidgetItem *item){
     if(device->hwFlowBusy()) return;
     QUuid guid = item->data(GUID).toUuid();
     if(guid.isNull() && item->data(NEW_FLAG).toInt() == 1){
-        // New profile
-        item->setText("");
-        ui->profileList->editItem(item);
+        // New profile: the item shows its name from the start, so an edit that ends without a commit (Escape, or a quick
+        // click on the next "New profile..." item) never leaves an empty item behind
+        KbProfile* newProfile = device->newProfileWithBlankMode();
+        device->appendProfile(newProfile);
+        item->setText(newProfile->name());
+        item->setData(GUID, newProfile->id().guid);
+        item->setData(NEW_FLAG, 0);
         item->setFlags(item->flags() | Qt::ItemIsEditable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);
         QFont font = item->font();
         font.setItalic(false);
         item->setFont(font);
         item->setIcon(QIcon(":/img/icon_profile.png"));
-        // Add the new profile and assign it to this item
-        KbProfile* newProfile = device->newProfileWithBlankMode();
-        device->appendProfile(newProfile);
-        item->setData(GUID, newProfile->id().guid);
-        item->setData(NEW_FLAG, 0);
         device->setCurrentProfile(newProfile);
         // Create another "new profile" item to replace this one
         addNewProfileItem();
+        // The editor opens with the name selected: typing replaces it
+        ui->profileList->editItem(item);
     }
 }
 
 void KbProfileDialog::on_profileList_itemChanged(QListWidgetItem *item){
     if(device->hwFlowBusy()) return;
-    KbProfile* currentProfile = device->currentProfile();
-    if(!item || !currentProfile || item->data(GUID).toUuid() != currentProfile->id().guid)
+    if(!item || item->data(NEW_FLAG).toInt() == 1)
         return;
-    if(!device->canManageProfile(currentProfile)){
-        item->setText(currentProfile->name());
+    // The item's own profile: an edit can end after another profile has become the current one
+    KbProfile* profile = device->find(item->data(GUID).toUuid());
+    if(!profile)
         return;
-    }
-    currentProfile->name(item->text());
-    // Set the text to the actual name (trimmed, "" replaced with "Unnamed")
-    item->setText(currentProfile->name());
+    if(device->canManageProfile(profile) && item->text() != profile->name())
+        profile->name(item->text());
+    // Show the actual name (trimmed, "" replaced with "Unnamed")
+    if(item->text() != profile->name())
+        item->setText(profile->name());
 }
 
 void KbProfileDialog::on_profileList_customContextMenuRequested(const QPoint &pos){

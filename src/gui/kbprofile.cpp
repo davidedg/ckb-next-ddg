@@ -14,8 +14,9 @@ KbProfile::KbProfile(Kb* parent, const KeyMap& keyMap, const KbProfile& other) :
 }
 
 KbProfile::KbProfile(Kb* parent, const KeyMap& keyMap, const QString& guid, const QString& modified) :
-    QObject(parent), _currentMode(nullptr), _usbId(guid, modified.toUInt(nullptr, 16)), _keyMap(keyMap), _needsSave(true)
+    QObject(parent), _currentMode(nullptr), _name("Unnamed"), _usbId(guid, modified.toUInt(nullptr, 16)), _keyMap(keyMap), _needsSave(true)
 {
+    // A new profile has a name from the start, as name() gives one to an empty name
     if(_usbId.guid.isNull())
         _usbId.guid = QUuid::createUuid();
 }
