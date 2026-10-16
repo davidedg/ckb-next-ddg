@@ -20,6 +20,7 @@ void ModeListWidget::setDevice(Kb* dev){
     modelptr = new ModeListTableModel(dev, this);
     device = dev;
     setModel(modelptr);
+    setItemDelegateForColumn(ModeListTableModel::COL_MODE_NAME, new ModeNameDelegate(this));
     // Highlight the new item on reorder
     connect(modelptr, &QAbstractItemModel::layoutChanged, this, [this](){
         const int index = device->currentProfile()->indexOf(device->currentMode());
@@ -142,6 +143,21 @@ void ModeListWidget::updateFloatingGeometry() {
     floatingView->setGeometry(horizontalHeader()->width() + frameWidth() - width,
                               frameWidth(), width,
                               viewport()->height() + horizontalHeader()->height());
+}
+
+int ModeListWidget::visibleRight() const {
+    const int right = viewport()->width() - 1;
+    if(!floatingView || floatingView->isHidden())
+        return right;
+    return qMin(right, floatingView->geometry().left() - viewport()->geometry().left() - 1);
+}
+
+void ModeNameDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex& index) const{
+    QStyledItemDelegate::updateEditorGeometry(editor, option, index);
+    QRect rect = editor->geometry();
+    rect.setLeft(qMax(rect.left(), 0));
+    rect.setRight(qMax(rect.left(), qMin(rect.right(), list->visibleRight())));
+    editor->setGeometry(rect);
 }
 
 void FloatingDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const{
