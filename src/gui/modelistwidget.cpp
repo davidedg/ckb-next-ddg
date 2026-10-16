@@ -7,6 +7,7 @@
 #include <QAbstractSlider>
 #include <QScrollBar>
 #include <QApplication>
+#include <QLineEdit>
 
 ModeListWidget::ModeListWidget(QWidget *parent) :
     QTableView(parent), device(nullptr), floatingView(nullptr), modelptr(nullptr), ignoreFocusLoss(false)
@@ -150,6 +151,12 @@ int ModeListWidget::visibleRight() const {
     if(!floatingView || floatingView->isHidden())
         return right;
     return qMin(right, floatingView->geometry().left() - viewport()->geometry().left() - 1);
+}
+
+QWidget* ModeNameDelegate::createEditor(QWidget* parent, const QStyleOptionViewItem&, const QModelIndex&) const{
+    auto* editor = new QLineEdit(parent);
+    editor->setFrame(editor->style()->styleHint(QStyle::SH_ItemView_DrawDelegateFrame, nullptr, editor));
+    return editor;
 }
 
 void ModeNameDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex& index) const{

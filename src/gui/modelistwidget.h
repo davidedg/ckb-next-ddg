@@ -33,11 +33,12 @@ private:
 };
 
 // The editor of a mode name: it ends where the floating column of the event icons begins, so the end of the text and the cursor
-// stay in sight
+// stay in sight. It keeps that width: the default text editor would widen itself with its text, under that column.
 class ModeNameDelegate : public QStyledItemDelegate
 {
 public:
     explicit ModeNameDelegate(ModeListWidget* view) : QStyledItemDelegate(view), list(view) {}
+    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const override;
     void updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex& index) const override;
 private:
     ModeListWidget* list;
