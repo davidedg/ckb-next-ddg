@@ -238,7 +238,11 @@ static void make_words(const cape_hwbind_slot* s, words* w){
         add(w, "zip:stale");
     if(s->name){
         uint8_t utf8[CAPE_INFO_NAME_UNITS * 3 + 1];
-        const int n = cape_hwslot_utf8(s->name, s->name_units, utf8, sizeof(utf8));
+        // iCUE cuts a long name at the end of its area, even inside a surrogate pair: there the lone first half is left out
+        size_t units = s->name_units;
+        if(units == CAPE_INFO_NAME_UNITS && s->name[units - 1] >= 0xd800 && s->name[units - 1] < 0xdc00)
+            units--;
+        const int n = cape_hwslot_utf8(s->name, units, utf8, sizeof(utf8));
         if(n < 0){
             w->err = CAPE_E_RANGE;
             return;

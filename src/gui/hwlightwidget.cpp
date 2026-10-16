@@ -4,11 +4,12 @@
 #include "k95pledmap.h"
 
 #include <QApplication>
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QColorDialog>
-#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QHelpEvent>
 #include <QLabel>
@@ -20,8 +21,12 @@
 #include <QPainterPath>
 #include <QPointer>
 #include <QPushButton>
+#include <QResizeEvent>
+#include <QSlider>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStyleOptionToolButton>
+#include <QStylePainter>
 #include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -80,11 +85,11 @@ void setText(cape_profile_text& value, const QByteArray& bytes){
     value.len = uint32_t(bytes.size());
 }
 QString kindName(int kind){
-    static const char* const names[] = {QT_TRANSLATE_NOOP("HwLightWidget", "Static colour"),
+    static const char* const names[] = {QT_TRANSLATE_NOOP("HwLightWidget", "Static color"),
         QT_TRANSLATE_NOOP("HwLightWidget", "Solid"), QT_TRANSLATE_NOOP("HwLightWidget", "Gradient"),
         QT_TRANSLATE_NOOP("HwLightWidget", "Wave"), QT_TRANSLATE_NOOP("HwLightWidget", "Ripple"),
-        QT_TRANSLATE_NOOP("HwLightWidget", "Colour pulse"), QT_TRANSLATE_NOOP("HwLightWidget", "Colour shift"),
-        QT_TRANSLATE_NOOP("HwLightWidget", "Two-colour wave"), QT_TRANSLATE_NOOP("HwLightWidget", "Rain"),
+        QT_TRANSLATE_NOOP("HwLightWidget", "Color pulse"), QT_TRANSLATE_NOOP("HwLightWidget", "Color shift"),
+        QT_TRANSLATE_NOOP("HwLightWidget", "Two-color wave"), QT_TRANSLATE_NOOP("HwLightWidget", "Rain"),
         QT_TRANSLATE_NOOP("HwLightWidget", "Rainbow wave"), QT_TRANSLATE_NOOP("HwLightWidget", "Spiral rainbow"),
         QT_TRANSLATE_NOOP("HwLightWidget", "Type lighting"), QT_TRANSLATE_NOOP("HwLightWidget", "Visor")};
     return kind >= 0 && kind < CAPE_PROFILE_EFFECTS ? QCoreApplication::translate("HwLightWidget", names[kind]) : QString();
@@ -101,8 +106,8 @@ void newId(cape_profile_uuid& id){
     std::memcpy(id.b, bytes.constData(), sizeof(id.b));
 }
 QString defaultName(int kind){
-    static const char* const names[] = {"Static colour", "Solid", "Gradient", "Wave", "Ripple", "Colour pulse",
-        "Colour shift", "Two-colour wave", "Rain", "Rainbow wave", "Spiral rainbow", "Type lighting", "Visor"};
+    static const char* const names[] = {"Static color", "Solid", "Gradient", "Wave", "Ripple", "Color pulse",
+        "Color shift", "Two-color wave", "Rain", "Rainbow wave", "Spiral rainbow", "Type lighting", "Visor"};
     return QString::fromLatin1(names[kind]);
 }
 HwLighting::Model newLayer(int kind){
@@ -224,7 +229,8 @@ public:
 // Keep the containing window large enough while this hardware editor is visible.
 class LightingWindowMinimum : public QObject {
 public:
-    LightingWindowMinimum(QWidget* owner, QTableWidget* points) : QObject(owner), editor(owner), table(points){
+    LightingWindowMinimum(QWidget* owner, QTableWidget* points, std::function<void()> fitted) :
+        QObject(owner), editor(owner), table(points), changed(std::move(fitted)){
         editor->installEventFilter(this);
         schedule();
     }
@@ -246,6 +252,7 @@ protected:
 private:
     QWidget* editor;
     QTableWidget* table;
+    std::function<void()> changed;
     QPointer<QWidget> host;
     QSize original;
     bool pending = false;
@@ -278,6 +285,8 @@ private:
         if(window->layout()) window->layout()->activate();
         const QSize minimum = original.expandedTo(window->minimumSizeHint());
         if(window->minimumSize() != minimum) window->setMinimumSize(minimum);
+        // A new minimum changes the room above it even when the window keeps its size.
+        if(changed) changed();
     }
 };
 
@@ -354,9 +363,104 @@ QDoubleSpinBox* realBox(QWidget* parent, const char* name, int decimals, double 
     box->setDecimals(decimals); box->setRange(min, max); box->setKeyboardTracking(false);
     box->setSingleStep(std::pow(10., -decimals)); return box;
 }
-QComboBox* choices(QWidget* parent, const char* name, const QStringList& names){
-    auto* box = new QComboBox(parent); box->setObjectName(name); box->addItems(names); return box;
+
+// A small button showing only a drawn symbol, in the palette's button text colour so it follows the theme and its state.
+class GlyphButton : public QToolButton {
+public:
+    enum Glyph { Up, Down, Left, Right, Plus, Minus, Clockwise, Counterclockwise };
+    GlyphButton(Glyph symbol, bool rectangular, const char* name, const QString& accessible, QWidget* parent) :
+        QToolButton(parent), glyph(symbol), wide(rectangular){
+        setObjectName(name); setAccessibleName(accessible); setToolButtonStyle(Qt::ToolButtonIconOnly);
+    }
+    QSize sizeHint() const override {
+        const int side = fontMetrics().height() + 6;
+        return QSize(wide ? side * 2 : side, side);
+    }
+    QSize minimumSizeHint() const override { return sizeHint(); }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QStylePainter painter(this);
+        QStyleOptionToolButton option; initStyleOption(&option);
+        // The symbol is the only content; the add button's menu needs no indicator.
+        option.features &= ~QStyleOptionToolButton::HasMenu; option.icon = QIcon(); option.text.clear();
+        painter.drawComplexControl(QStyle::CC_ToolButton, option);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QColor ink = palette().color(isEnabled() ? QPalette::Active : QPalette::Disabled, QPalette::ButtonText);
+        painter.setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); painter.setBrush(Qt::NoBrush);
+        const QPointF c = QRectF(rect()).center();
+        const double s = std::min(width(), height()) * .2;
+        switch(glyph){
+        case Up: painter.drawPolyline(QPolygonF{c + QPointF(-s, s/2), c + QPointF(0, -s/2), c + QPointF(s, s/2)}); break;
+        case Down: painter.drawPolyline(QPolygonF{c + QPointF(-s, -s/2), c + QPointF(0, s/2), c + QPointF(s, -s/2)}); break;
+        case Left: painter.drawPolyline(QPolygonF{c + QPointF(s/2, -s), c + QPointF(-s/2, 0), c + QPointF(s/2, s)}); break;
+        case Right: painter.drawPolyline(QPolygonF{c + QPointF(-s/2, -s), c + QPointF(s/2, 0), c + QPointF(-s/2, s)}); break;
+        case Plus: painter.drawLine(c + QPointF(-s, 0), c + QPointF(s, 0)); painter.drawLine(c + QPointF(0, -s), c + QPointF(0, s)); break;
+        case Minus: painter.drawLine(c + QPointF(-s, 0), c + QPointF(s, 0)); break;
+        case Clockwise:
+        case Counterclockwise: {
+            // Most of a circle, clockwise from the top, with a filled arrowhead at its end; mirrored for the other rotation.
+            if(glyph == Counterclockwise){ painter.translate(c.x() * 2, 0); painter.scale(-1, 1); }
+            const double r = s * 1.5, end = (90. - 290.) * std::acos(-1.) / 180.;
+            painter.drawArc(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), 90 * 16, -290 * 16);
+            const QPointF at = c + r * QPointF(std::cos(end), -std::sin(end));
+            const QPointF along(std::sin(end), std::cos(end)), out(std::cos(end), -std::sin(end));
+            const double a = s * .9;
+            painter.setBrush(ink); painter.setPen(Qt::NoPen);
+            painter.drawPolygon(QPolygonF{at + along * a, at - along * (a * .3) + out * (a * .75), at - along * (a * .3) - out * (a * .75)});
+            break;
+        }
+        }
+    }
+private:
+    Glyph glyph;
+    bool wide;
+};
+
+// The keyboard drawn at the height the editor grants it; it never asks for a height from its width.
+class KeyboardBox : public QWidget {
+public:
+    KeyboardBox(KeyWidget* keys, QWidget* parent) : QWidget(parent), keyboard(keys){
+        keys->setParent(this); setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    }
+    QSize minimumSizeHint() const override { return QSize(0, MinimumHeight); }
+    QSize sizeHint() const override { return QSize(0, MinimumHeight); }
+    static constexpr int MinimumHeight = 160;
+protected:
+    void resizeEvent(QResizeEvent*) override { keyboard->setGeometry(rect()); }
+private:
+    KeyWidget* keyboard;
+};
+
+// A short slider with its marks named underneath: the first name at the left end, the last at the right, others between.
+QWidget* scale(QWidget* parent, const char* name, QSlider*& slider, int min, int max, int tick, const QStringList& names){
+    auto* box = new QWidget(parent); box->setObjectName(QString(name) + "Scale");
+    auto* grid = new QGridLayout(box); grid->setContentsMargins(0, 0, 0, 0); grid->setVerticalSpacing(0);
+    slider = new QSlider(Qt::Horizontal, box); slider->setObjectName(name);
+    slider->setRange(min, max); slider->setPageStep(tick); slider->setTickInterval(tick); slider->setTickPosition(QSlider::TicksBelow);
+    grid->addWidget(slider, 0, 0, 1, names.size());
+    for(int n = 0; n < names.size(); ++n){
+        auto* label = new QLabel(names[n], box);
+        label->setAlignment(n == 0 ? Qt::AlignLeft : n + 1 == names.size() ? Qt::AlignRight : Qt::AlignHCenter);
+        grid->addWidget(label, 1, n);
+    }
+    box->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    return box;
 }
+
+// Mutually exclusive choices shown side by side; each button's id is the value it stands for.
+QWidget* choiceRow(QWidget* parent, const char* name, QButtonGroup*& group, const std::vector<std::pair<QAbstractButton*, int>>& buttons,
+                   QWidget* trailing = nullptr){
+    auto* row = new QWidget(parent); row->setObjectName(name);
+    auto* box = new QHBoxLayout(row); box->setContentsMargins(0, 0, 0, 0); box->setSpacing(2);
+    group = new QButtonGroup(row); group->setExclusive(true);
+    for(const auto& b : buttons){
+        b.first->setParent(row); b.first->setCheckable(true);
+        group->addButton(b.first, b.second); box->addWidget(b.first);
+    }
+    if(trailing){ trailing->setParent(row); box->addWidget(trailing); }
+    box->addStretch(); return row;
+}
+QPushButton* choice(const QString& text, const char* name){ auto* b = new QPushButton(text); b->setObjectName(name); return b; }
 }
 
 // All points remain in the model and table. Overlapping handles are never merged.
@@ -480,8 +584,8 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
     root->addWidget(new QLabel(tr("Hardware lighting   |   Select a layer to edit its keys and settings."), this));
     keyboard = new KeyWidget(this); keyboard->setObjectName("hwLightKeys"); keyboard->rgbMode(true);
     keyboard->selectionOutline(true);
-    keyboard->setFixedHeight(160);
-    root->addWidget(keyboard);
+    keyboardBox = new KeyboardBox(keyboard, this);
+    root->addWidget(keyboardBox, 1);
     allKeys = new QCheckBox(tr("All keys"), this); allKeys->setObjectName("hwLightAllKeys");
     clear = new QPushButton(tr("Clear selection"), this); clear->setObjectName("hwLightClear");
     selectionNote = new QLabel(this); selectionNote->setObjectName("hwLightSelectionNote");
@@ -490,14 +594,20 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
     auto* left = new LayerColumn(this);
     auto* column = new QVBoxLayout(left); column->setContentsMargins(0,0,0,0); column->setSpacing(5);
     quota = new QLabel(this); quota->setObjectName("hwLightQuota");
-    quota->setToolTip(tr("The top layer has priority. Muted Custom layers also count towards the maximum of five.\nDrag layers or use Move up / Move down to change their order."));
-    column->addWidget(quota);
+    quota->setToolTip(tr("The top layer has priority. Muted Custom layers also count towards the maximum of five.\nDrag layers or use the arrows to change their order."));
+    up = new GlyphButton(GlyphButton::Up, false, "hwLightUp", tr("Move layer up"), this);
+    down = new GlyphButton(GlyphButton::Down, false, "hwLightDown", tr("Move layer down"), this);
+    remove = new GlyphButton(GlyphButton::Minus, false, "hwLightRemove", tr("Remove layer"), this);
+    add = new GlyphButton(GlyphButton::Plus, false, "hwLightAdd", tr("Add layer"), this);
+    auto* header = new QHBoxLayout; header->setContentsMargins(0,0,0,0); header->setSpacing(2);
+    header->addWidget(quota); header->addStretch();
+    for(auto* button : {up, down, remove, add}) header->addWidget(button);
+    column->addLayout(header);
     auto* list = new LayerList(this); layers = list; layers->setObjectName("hwLightLayers");
     layers->setItemDelegate(new LayerDelegate(layers)); layers->setEditTriggers(QAbstractItemView::NoEditTriggers);
     layers->setDragDropMode(QAbstractItemView::InternalMove); layers->setDefaultDropAction(Qt::MoveAction);
     layers->setContextMenuPolicy(Qt::CustomContextMenu);
     column->addWidget(layers, 1);
-    add = new QToolButton(this); add->setText(tr("Add...")); add->setObjectName("hwLightAdd");
     add->setPopupMode(QToolButton::InstantPopup);
     auto* addMenu = new QMenu(add); add->setMenu(addMenu);
     auto* customMenu = addMenu->addMenu(tr("Custom")); auto* presetMenu = addMenu->addMenu(tr("Presets"));
@@ -506,11 +616,7 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
         action->setObjectName(QString("hwLightAdd%1").arg(kind)); action->setData(kind);
         connect(action, &QAction::triggered, this, [this,kind](){ addLayer(kind); });
     }
-    remove = new QPushButton(tr("Remove"), this); remove->setObjectName("hwLightRemove");
-    auto* actions = new QHBoxLayout; actions->addWidget(add); actions->addWidget(remove); column->addLayout(actions);
-    up = new QPushButton(tr("Move up"), this); up->setObjectName("hwLightUp");
-    down = new QPushButton(tr("Move down"), this); down->setObjectName("hwLightDown");
-    column->addWidget(rowWidget(this, {up, down})); body->addWidget(left);
+    body->addWidget(left);
     auto* right = new QVBoxLayout; right->setSpacing(5); body->addLayout(right, 1);
     mutedNote = new QLabel(tr("This layer is muted. Its keys and settings are kept."), this);
     mutedNote->setWordWrap(true); mutedNote->setObjectName("hwLightMutedNote"); right->addWidget(mutedNote);
@@ -520,7 +626,9 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
     auto* staticPanel = new QWidget(this); auto* form = new QFormLayout(staticPanel);
     staticColour = new ColorButton(this); staticColour->setObjectName("hwLightStaticColour");
     opacity = realBox(this, "hwLightOpacity", 0, 0, 100); opacity->setSuffix(tr(" %"));
-    form->addRow(tr("Colour:"), staticColour); form->addRow(tr("Opacity:"), opacity); panels->addWidget(staticPanel);
+    auto* opacityScale = scale(this, "hwLightOpacitySlider", opacitySlider, 0, 100, 25, {"0", "100"});
+    form->addRow(tr("Color:"), staticColour); form->addRow(tr("Opacity:"), opacity); form->addRow(QString(), opacityScale);
+    panels->addWidget(staticPanel);
 
     customTabs = new QTabWidget(this); panels->addWidget(customTabs);
     auto* colours = new QWidget(this); auto* coloursBox = new QVBoxLayout(colours); coloursBox->setContentsMargins(7,7,7,7);
@@ -533,36 +641,58 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
     points = new QTableWidget(this); points->setObjectName("hwLightPoints"); points->setSelectionBehavior(QAbstractItemView::SelectRows);
     points->setSelectionMode(QAbstractItemView::SingleSelection); points->verticalHeader()->hide();
     points->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); coloursBox->addWidget(points, 1);
-    customTabs->addTab(colours, tr("Colours"));
+    customTabs->addTab(colours, tr("Colors"));
     auto* options = new QWidget(this); auto* optionsForm = new QFormLayout(options);
-    start = choices(this, "hwLightStart", {tr("With profile"), tr("On key pressed")});
-    stop = choices(this, "hwLightStop", {tr("After"), tr("On key press"), tr("On key release"), tr("Never")});
+    auto* startRow = choiceRow(this, "hwLightStart", start, {{choice(tr("With profile"), "hwLightStartProfile"), 0},
+                                                            {choice(tr("On key pressed"), "hwLightStartKey"), 1}});
     after = new QSpinBox(this); after->setObjectName("hwLightAfter"); after->setRange(1,99);
+    // The ids keep the meaning of the stop settings: 0 after a number of runs, 1 key press, 2 key release, 3 never.
+    auto* stopRow = choiceRow(this, "hwLightStop", stop, {{choice(tr("On key press"), "hwLightStopKeyPress"), 1},
+        {choice(tr("On key release"), "hwLightStopKeyRelease"), 2}, {choice(tr("Never"), "hwLightStopNever"), 3},
+        {choice(tr("After"), "hwLightStopAfter"), 0}}, after);
     tail = realBox(this, "hwLightTail", 1, .1, 99.9);
     velocity = realBox(this, "hwLightVelocity", 1, .1, 99.9);
     angle = new QSpinBox(this); angle->setObjectName("hwLightAngle"); angle->setRange(0,359);
     twoSides = new QCheckBox(tr("Two sides"), this); twoSides->setObjectName("hwLightTwoSides");
-    optionsForm->addRow(tr("Start:"), start); optionsForm->addRow(tr("Stop:"), rowWidget(this, {stop, after}));
+    // The choices sit under their labels to leave them the whole width of the panel.
+    optionsForm->addRow(new QLabel(tr("Start:"), this)); optionsForm->addRow(startRow);
+    optionsForm->addRow(new QLabel(tr("Stop:"), this)); optionsForm->addRow(stopRow);
     optionsForm->addRow(tr("Tail:"), tail); optionsForm->addRow(tr("Velocity:"), velocity);
-    optionsForm->addRow(tr("Angle:"), angle); optionsForm->addRow(twoSides); customTabs->addTab(options, tr("Options"));
+    // Two sides shares the row of Angle: both belong to Wave only.
+    auto* angleRow = new QWidget(this); auto* angleBox = new QHBoxLayout(angleRow); angleBox->setContentsMargins(0,0,0,0);
+    angleBox->addWidget(angle); angleBox->addSpacing(12); angleBox->addWidget(twoSides); angleBox->addStretch();
+    optionsForm->addRow(tr("Angle:"), angleRow); customTabs->addTab(options, tr("Options"));
 
     auto* preset = new QWidget(this); auto* presetForm = new QFormLayout(preset); panels->addWidget(preset);
-    colourMode = choices(this, "hwLightColourMode", {tr("Random"), tr("Alternating")});
+    colourModeRow = choiceRow(this, "hwLightColourMode", colourMode, {{choice(tr("Random"), "hwLightColourRandom"), 1},
+                                                                     {choice(tr("Alternating"), "hwLightColourAlternating"), 0}});
     presetColours[0] = new ColorButton(this); presetColours[1] = new ColorButton(this);
-    for(int n = 0; n < 2; ++n){ presetColours[n]->setObjectName(QString("hwLightPresetColour%1").arg(n)); presetColours[n]->setLabel(false); }
-    colourRow = rowWidget(this, {presetColours[0], presetColours[1]});
-    speed = choices(this, "hwLightSpeed", {tr("Slow"), tr("Medium"), tr("Fast")});
-    direction = choices(this, "hwLightDirection", {});
-    typeMode = choices(this, "hwLightTypeMode", {tr("Key"), tr("Ripple")});
-    typeDuration = choices(this, "hwLightTypeDuration", {tr("Short"), tr("Medium"), tr("Long")});
-    typeRow = rowWidget(this, {new QLabel(tr("Mode:"), this), typeMode}); presetForm->addRow(typeRow);
-    presetForm->addRow(colourMode); presetForm->addRow(colourRow);
-    speedRow = rowWidget(this, {new QLabel(tr("Speed:"), this), speed}); presetForm->addRow(speedRow);
-    directionRow = rowWidget(this, {new QLabel(tr("Direction:"), this), direction}); presetForm->addRow(directionRow);
-    typeDurationRow = rowWidget(this, {new QLabel(tr("Duration:"), this), typeDuration}); presetForm->addRow(typeDurationRow);
+    for(int n = 0; n < 2; ++n){
+        presetColours[n]->setObjectName(QString("hwLightPresetColour%1").arg(n));
+        // Random hides the colours but keeps their room, so the rows below never move.
+        auto policy = presetColours[n]->sizePolicy(); policy.setRetainSizeWhenHidden(true); presetColours[n]->setSizePolicy(policy);
+    }
+    colourRow = rowWidget(this, {presetColours[0], presetColours[1]}); colourRow->layout()->setSpacing(2);
+    speedRow = scale(this, "hwLightSpeed", speed, 1, 3, 1, {tr("Slow"), tr("Medium"), tr("Fast")});
+    directionRow = choiceRow(this, "hwLightDirection", direction, {
+        {new GlyphButton(GlyphButton::Left, true, "hwLightDirectionLeft", tr("Left"), this), 0},
+        {new GlyphButton(GlyphButton::Right, true, "hwLightDirectionRight", tr("Right"), this), 1},
+        {new GlyphButton(GlyphButton::Up, true, "hwLightDirectionUp", tr("Up"), this), 2},
+        {new GlyphButton(GlyphButton::Down, true, "hwLightDirectionDown", tr("Down"), this), 3}});
+    rotationRow = choiceRow(this, "hwLightRotation", rotation, {
+        {new GlyphButton(GlyphButton::Clockwise, true, "hwLightClockwise", tr("Clockwise"), this), 0},
+        {new GlyphButton(GlyphButton::Counterclockwise, true, "hwLightCounterclockwise", tr("Counterclockwise"), this), 1}});
+    typeRow = choiceRow(this, "hwLightTypeMode", typeMode, {{choice(tr("Key"), "hwLightTypeModeKey"), 0},
+                                                            {choice(tr("Ripple"), "hwLightTypeModeRipple"), 1}});
+    typeDurationRow = scale(this, "hwLightTypeDuration", typeDuration, 1, 3, 1, {tr("Short"), tr("Medium"), tr("Long")});
+    presetForm->addRow(tr("Mode:"), typeRow);
+    presetForm->addRow(tr("Colors:"), colourModeRow); presetForm->addRow(QString(), colourRow);
+    presetForm->addRow(tr("Speed:"), speedRow);
+    presetForm->addRow(tr("Direction:"), directionRow); presetForm->addRow(tr("Direction:"), rotationRow);
+    presetForm->addRow(tr("Duration:"), typeDurationRow);
     auto* note = new QLabel(tr("Note: Enabled effects will run on the keyboard only after saving the slot."), this);
     note->setWordWrap(true); root->addWidget(note);
-    new LightingWindowMinimum(this,points);
+    new LightingWindowMinimum(this,points,[this](){ fitKeyboard(); });
 
     list->toggle = [this](int row){ toggle(row); };
     connect(layers, &QListWidget::currentRowChanged, this, [this](int row){ if(!filling){ current = row; refreshPanel(); } });
@@ -590,9 +720,9 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
         }
     });
     connect(layers, &QWidget::customContextMenuRequested, this, &HwLightWidget::contextMenu);
-    connect(up, &QPushButton::clicked, this, [this](){ move(current, current - 1); });
-    connect(down, &QPushButton::clicked, this, [this](){ move(current, current + 1); });
-    connect(remove, &QPushButton::clicked, this, &HwLightWidget::removeLayer);
+    connect(up, &QToolButton::clicked, this, [this](){ move(current, current - 1); });
+    connect(down, &QToolButton::clicked, this, [this](){ move(current, current + 1); });
+    connect(remove, &QToolButton::clicked, this, &HwLightWidget::removeLayer);
     connect(keyboard, &KeyWidget::selectionChanged, this, &HwLightWidget::changeKeys);
     connect(clear, &QPushButton::clicked, this, [this](){ changeKeys({}); });
     connect(allKeys, &QCheckBox::toggled, this, [this](bool all){
@@ -608,15 +738,27 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
         mutate([&](cape_profile_layer& l){ if(l.effect.ntransitions) setRgb(l.effect.transitions[0].colour, c); });
     });
     connect(opacity, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double v){
-        if(!filling) mutate([&](cape_profile_layer& l){ l.effect.opacity = uint32_t(std::lround(v * 255. / 100.)); });
+        if(filling) return;
+        { const QSignalBlocker block(opacitySlider); opacitySlider->setValue(int(std::lround(v))); }
+        mutate([&](cape_profile_layer& l){ l.effect.opacity = uint32_t(std::lround(v * 255. / 100.)); });
+    });
+    // A drag only shows its value; the draft changes once, when the slider is released. Keys and the wheel change it at once.
+    connect(opacitySlider, &QSlider::valueChanged, this, [this](int v){
+        if(filling) return;
+        if(opacitySlider->isSliderDown()){ const QSignalBlocker block(opacity); opacity->setValue(v); }
+        else opacity->setValue(v);
+    });
+    connect(opacitySlider, &QSlider::sliderReleased, this, [this](){
+        const int v = opacitySlider->value();
+        mutate([&](cape_profile_layer& l){ l.effect.opacity = uint32_t(std::lround(v * 255. / 100.)); });
     });
     connect(duration, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double v){
         if(!filling) mutate([&](cape_profile_layer& l){ l.effect.duration = uint32_t(std::lround(v * 1000.)); });
     });
-    connect(start, QOverload<int>::of(&QComboBox::activated), this, [this](int v){
+    connect(start, &QButtonGroup::idClicked, this, [this](int v){
         mutate([&](cape_profile_layer& l){ l.start_with_profile = v == 0; l.start_on_key_press = v == 1; });
     });
-    connect(stop, QOverload<int>::of(&QComboBox::activated), this, [this](int v){
+    connect(stop, &QButtonGroup::idClicked, this, [this](int v){
         mutate([&](cape_profile_layer& l){
             l.stop_on_key_press = v == 1; l.stop_on_key_release = v == 2;
             l.stop_after_times = v == 0 ? std::max(1, after->value()) : v == 3 ? -1 : 0;
@@ -637,26 +779,26 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
     connect(twoSides, &QCheckBox::toggled, this, [this](bool v){
         if(!filling) mutate([&](cape_profile_layer& l){ l.effect.double_sided = v; });
     });
-    connect(colourMode, QOverload<int>::of(&QComboBox::activated), this, [this](int v){
-        mutate([&](cape_profile_layer& l){ l.effect.random = v == 0; });
+    connect(colourMode, &QButtonGroup::idClicked, this, [this](int random){
+        mutate([&](cape_profile_layer& l){ l.effect.random = random; });
     });
     for(int n = 0; n < 2; ++n) connect(presetColours[n], &ColorButton::colorChanged, this, [this,n](QColor c){
         mutate([&](cape_profile_layer& l){ l.effect.colours[n] = (l.effect.colours[n] & 0xff000000u) | (c.rgb() & 0x00ffffffu); });
     });
-    connect(speed, QOverload<int>::of(&QComboBox::activated), this, [this](int v){
-        mutate([&](cape_profile_layer& l){ l.effect.speed = uint32_t(v + 1); });
+    connect(speed, &QSlider::valueChanged, this, [this](int v){
+        if(!filling) mutate([&](cape_profile_layer& l){ l.effect.speed = uint32_t(v); });
     });
-    connect(direction, QOverload<int>::of(&QComboBox::activated), this, [this](int v){
-        mutate([&](cape_profile_layer& l){
-            if(l.effect.kind == CAPE_PROFILE_SPIRAL_RAINBOW) l.effect.clockwise = v == 0;
-            else l.effect.direction = uint32_t(v + 1);
-        });
+    connect(direction, &QButtonGroup::idClicked, this, [this](int v){
+        mutate([&](cape_profile_layer& l){ l.effect.direction = uint32_t(v + 1); });
     });
-    connect(typeMode, QOverload<int>::of(&QComboBox::activated), this, [this](int v){
+    connect(rotation, &QButtonGroup::idClicked, this, [this](int v){
+        mutate([&](cape_profile_layer& l){ l.effect.clockwise = v == 0; });
+    });
+    connect(typeMode, &QButtonGroup::idClicked, this, [this](int v){
         mutate([&](cape_profile_layer& l){ l.effect.type_behaviour = uint32_t(v); });
     });
-    connect(typeDuration, QOverload<int>::of(&QComboBox::activated), this, [this](int v){
-        mutate([&](cape_profile_layer& l){ l.effect.type_duration = uint32_t(v + 1); });
+    connect(typeDuration, &QSlider::valueChanged, this, [this](int v){
+        if(!filling) mutate([&](cape_profile_layer& l){ l.effect.type_duration = uint32_t(v); });
     });
     strip->select = [this](int row){ points->selectRow(row); };
     strip->pick = [this](int row){ pointColour(row); };
@@ -702,7 +844,72 @@ HwLightWidget::HwLightWidget(QWidget* parent) : QWidget(parent){
     });
     connect(addPoint, &QPushButton::clicked, this, &HwLightWidget::addTransition);
     connect(removePoint, &QPushButton::clicked, this, &HwLightWidget::removeTransition);
+    sizeChoices();
     refreshList();
+}
+
+void HwLightWidget::resizeEvent(QResizeEvent* event){
+    QWidget::resizeEvent(event);
+    fitKeyboard();
+}
+
+void HwLightWidget::changeEvent(QEvent* event){
+    QWidget::changeEvent(event);
+    if(event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange) sizeChoices();
+}
+
+// Space beyond the window's minimum height goes 3 of every 10 pixels to the keyboard, the rest to the editor below, until the
+// keyboard fills its width. At the smallest window every part keeps its minimum height.
+void HwLightWidget::fitKeyboard(){
+    const QWidget* top = window();
+    int extra = std::max(0, height() - minimumSizeHint().height());
+    if(top != this) extra = std::min(extra, std::max(0, top->height() - top->minimumHeight()));
+    const int useful = std::max<int>(KeyboardBox::MinimumHeight, keyboard->heightForWidth(width()));
+    const int wanted = KeyboardBox::MinimumHeight + int(std::lround(extra * .3));
+    keyboardBox->setMaximumHeight(std::min(useful, wanted));
+}
+
+// Every choice button of a row has the width of the widest; the sliders end at about three quarters of the panel at the smallest
+// window. Both follow the font.
+void HwLightWidget::sizeChoices(){
+    // Start and Stop share one width so their columns line up. The preset choices and colours share another, and the preset
+    // sliders end with them.
+    const auto buttons = [](std::initializer_list<QButtonGroup*> groups){
+        std::vector<QAbstractButton*> all;
+        for(auto* g : groups) for(auto* b : g->buttons()) all.push_back(b);
+        return all;
+    };
+    auto preset = buttons({typeMode, colourMode});
+    for(auto* b : presetColours) preset.push_back(b);
+    int presetWidth = 0;
+    for(const auto& group : {buttons({start, stop}), preset}){
+        int width = 0;
+        for(auto* b : group){
+            b->setMinimumWidth(0); b->setMaximumWidth(QWIDGETSIZE_MAX);
+            if(auto* colourButton = dynamic_cast<ColorButton*>(b)){
+                // The widest values a colour can show, so its button never changes size.
+                const QColor shown = colourButton->color(); colourButton->color(QColor(255, 255, 255));
+                width = std::max(width, b->sizeHint().width()); colourButton->color(shown);
+            } else width = std::max(width, b->sizeHint().width());
+        }
+        for(auto* b : group) b->setFixedWidth(width);
+        presetWidth = width;
+    }
+    for(auto* box : {speedRow, typeDurationRow}) box->setFixedWidth(presetWidth * 2 + 2);
+    opacitySlider->parentWidget()->setFixedWidth(fontMetrics().averageCharWidth() * 40);
+    // The preset rows come and go with the effect and its mode: every label keeps the width of the widest, so the fields
+    // never move.
+    auto* presetForm = static_cast<QFormLayout*>(panels->widget(3)->layout());
+    std::vector<QWidget*> labels;
+    int labelWidth = 0;
+    for(int row = 0; row < presetForm->rowCount(); ++row){
+        auto* item = presetForm->itemAt(row, QFormLayout::LabelRole);
+        if(!item || !item->widget()) continue;
+        item->widget()->setMinimumWidth(0);
+        labelWidth = std::max(labelWidth, item->widget()->sizeHint().width());
+        labels.push_back(item->widget());
+    }
+    for(auto* label : labels) label->setMinimumWidth(labelWidth);
 }
 
 cape_profile_layer* HwLightWidget::selected(){
@@ -719,6 +926,7 @@ void HwLightWidget::setSlot(HwSlotDraft::Draft* next, const KeyMap& map, const Q
     filling = true;
     keyboard->map(lightingMap(map,layout)); keyboard->setFixedKeys(indicators, tr("Set in Performance tab"));
     filling = false;
+    fitKeyboard();
     refreshList();
 }
 
@@ -783,42 +991,51 @@ void HwLightWidget::refreshPanel(){
     else if(l->effect.kind == CAPE_PROFILE_STATIC){
         panels->setCurrentIndex(1);
         staticColour->color(l->effect.ntransitions ? colour(l->effect.transitions[0].colour) : QColor(Qt::black));
-        opacity->setValue(l->effect.opacity * 100. / 255.);
+        opacity->setValue(l->effect.opacity * 100. / 255.); opacitySlider->setValue(int(std::lround(opacity->value())));
     } else if(custom){
         panels->setCurrentIndex(2);
         const auto& e = l->effect;
         duration->setRange(.1, 99.9);
         duration->setValue(e.duration / 1000.);
         duration->setToolTip(tr("Stored duration: %1 ms. Changing duration keeps relative point positions.").arg(e.duration));
-        start->setCurrentIndex(l->start_on_key_press ? 1 : 0);
-        stop->setCurrentIndex(l->stop_on_key_press ? 1 : l->stop_on_key_release ? 2 : l->stop_after_times > 0 ? 0 : 3);
+        start->button(l->start_on_key_press ? 1 : 0)->setChecked(true);
+        const int stopId = l->stop_on_key_press ? 1 : l->stop_on_key_release ? 2 : l->stop_after_times > 0 ? 0 : 3;
+        stop->button(stopId)->setChecked(true);
         after->setRange(1, 99);
-        after->setValue(l->stop_after_times >= 0 ? l->stop_after_times : 1); after->setVisible(stop->currentIndex() == 0);
+        after->setValue(l->stop_after_times >= 0 ? l->stop_after_times : 1); after->setEnabled(stopId == 0);
         tail->setRange(.1, 99.9); tail->setValue(e.tail_length / 10.);
         velocity->setRange(.1, 99.9); velocity->setValue(e.velocity / 10.);
         angle->setValue(int(e.angle)); twoSides->setChecked(e.double_sided);
         auto* form = static_cast<QFormLayout*>(customTabs->widget(1)->layout());
         const bool spatial = e.kind == CAPE_PROFILE_RIPPLE || e.kind == CAPE_PROFILE_WAVE;
         for(auto* box : {tail, velocity}){ box->setVisible(spatial); form->labelForField(box)->setVisible(spatial); }
-        angle->setVisible(e.kind == CAPE_PROFILE_WAVE); form->labelForField(angle)->setVisible(e.kind == CAPE_PROFILE_WAVE);
-        twoSides->setVisible(e.kind == CAPE_PROFILE_WAVE);
+        angle->parentWidget()->setVisible(e.kind == CAPE_PROFILE_WAVE); form->labelForField(angle->parentWidget())->setVisible(e.kind == CAPE_PROFILE_WAVE);
         addPoint->setText(solid ? tr("Add block") : tr("Add point"));
         addPoint->setEnabled(editable && e.ntransitions + (solid ? 2u : 1u) <= MaxPoints);
     } else {
         panels->setCurrentIndex(3);
         const auto& e = l->effect;
+        auto* form = static_cast<QFormLayout*>(panels->widget(3)->layout());
+        const auto showRow = [form](QWidget* field, bool visible){
+            field->setVisible(visible); if(auto* label = form->labelForField(field)) label->setVisible(visible);
+        };
+        const auto check = [](QButtonGroup* group, int id){
+            if(auto* b = group->button(id)){ b->setChecked(true); return; }
+            // A value without a button shows no choice, never the one of the previous layer.
+            group->setExclusive(false); for(auto* b : group->buttons()) b->setChecked(false); group->setExclusive(true);
+        };
         const bool hasColours = e.kind != CAPE_PROFILE_RAINBOW_WAVE && e.kind != CAPE_PROFILE_SPIRAL_RAINBOW;
-        colourMode->setVisible(hasColours); colourMode->setCurrentIndex(e.random ? 0 : 1);
-        colourRow->setVisible(hasColours && !e.random);
+        showRow(colourModeRow, hasColours); check(colourMode, e.random ? 1 : 0);
+        showRow(colourRow, hasColours);
+        for(auto* button : presetColours) button->setVisible(!e.random);
         for(int n = 0; n < 2; ++n) presetColours[n]->color(QColor::fromRgba(e.colours[n]));
-        typeRow->setVisible(e.kind == CAPE_PROFILE_TYPE); typeMode->setCurrentIndex(int(e.type_behaviour));
-        typeDurationRow->setVisible(e.kind == CAPE_PROFILE_TYPE && e.type_behaviour == 0); typeDuration->setCurrentIndex(int(e.type_duration) - 1);
-        speedRow->setVisible(e.kind != CAPE_PROFILE_TYPE || e.type_behaviour != 0); speed->setCurrentIndex(int(e.speed) - 1);
+        showRow(typeRow, e.kind == CAPE_PROFILE_TYPE); check(typeMode, int(e.type_behaviour));
+        showRow(typeDurationRow, e.kind == CAPE_PROFILE_TYPE && e.type_behaviour == 0); typeDuration->setValue(int(e.type_duration));
+        showRow(speedRow, e.kind != CAPE_PROFILE_TYPE || e.type_behaviour != 0); speed->setValue(int(e.speed));
         const bool spiral = e.kind == CAPE_PROFILE_SPIRAL_RAINBOW;
-        directionRow->setVisible(spiral || e.kind == CAPE_PROFILE_COLOR_WAVE || e.kind == CAPE_PROFILE_RAINBOW_WAVE);
-        direction->clear(); direction->addItems(spiral ? QStringList{tr("Clockwise"), tr("Counterclockwise")} :
-                                                QStringList{tr("Left"), tr("Right"), tr("Up"), tr("Down")});
-        direction->setCurrentIndex(spiral ? (e.clockwise ? 0 : 1) : int(e.direction) - 1);
+        showRow(directionRow, e.kind == CAPE_PROFILE_COLOR_WAVE || e.kind == CAPE_PROFILE_RAINBOW_WAVE);
+        showRow(rotationRow, spiral);
+        check(direction, int(e.direction) - 1); check(rotation, e.clockwise ? 0 : 1);
     }
     filling = false;
     fillPoints(); refreshKeys();
@@ -1019,19 +1236,24 @@ void HwLightWidget::fillPoints(){
     if(!e){ points->setRowCount(0); filling = saved; strip->update(); return; }
     const bool solid = e->kind == CAPE_PROFILE_SOLID;
     points->setColumnCount(solid ? 4 : 3);
-    points->setHorizontalHeaderLabels(solid ? QStringList{tr("Start (s)"), tr("End (s)"), tr("Colour"), tr("Intensity (%)")} :
-                                            QStringList{tr("Time (s)"), tr("Colour"), tr("Intensity (%)")});
+    points->setHorizontalHeaderLabels(solid ? QStringList{tr("Start (s)"), tr("End (s)"), tr("Color"), tr("Intensity (%)")} :
+                                            QStringList{tr("Time (s)"), tr("Color"), tr("Intensity (%)")});
     points->setRowCount(int(e->ntransitions / (solid ? 2 : 1)));
     for(int row = 0; row < points->rowCount(); ++row){
         const auto& t = e->transitions[row * (solid ? 2 : 1)];
         for(int col = 0; col < (solid ? 2 : 1); ++col){
             const double relative = e->transitions[row * (solid ? 2 : 1) + col].time;
-            auto* cell = new QTableWidgetItem(QString::number(relative * e->duration / 1000., 'f', 3));
-            cell->setToolTip(tr("Relative position: %1").arg(relative, 0, 'g', 17)); points->setItem(row, col, cell);
+            points->setItem(row, col, new QTableWidgetItem(QString::number(relative * e->duration / 1000., 'f', 3)));
         }
         const QColor c = colour(t.colour);
         auto* swatch = new QTableWidgetItem(c.name().toUpper());
-        QPixmap pix(16,16); pix.fill(c); swatch->setData(Qt::DecorationRole, pix);
+        // A mid-grey outer frame keeps a 0 % intensity swatch visible on light and dark themes.
+        QPixmap pix(18,18); pix.fill(Qt::transparent);
+        {
+            QPainter painter(&pix); painter.setCompositionMode(QPainter::CompositionMode_Source);
+            painter.fillRect(0,0,18,18,QColor(128,128,128)); painter.fillRect(1,1,16,16,c);
+        }
+        swatch->setData(Qt::DecorationRole, pix);
         swatch->setFlags(swatch->flags() & ~Qt::ItemIsEditable); points->setItem(row, solid ? 2 : 1, swatch);
         auto* intensity = new QTableWidgetItem(QString::number((t.colour.has_alpha ? t.colour.c[3] : 1.) * 100., 'f', 1));
         points->setItem(row, solid ? 3 : 2, intensity);
@@ -1086,10 +1308,31 @@ void HwLightWidget::addTransition(){
     const bool solid = l->effect.kind == CAPE_PROFILE_SOLID;
     const uint32_t count = solid ? 2u : 1u;
     if(l->effect.ntransitions + count > MaxPoints) return;
+    int added = -1;
     mutate([&](cape_profile_layer& layer){
         auto& e = layer.effect;
         uint32_t insert = e.ntransitions;
-        double low = e.ntransitions ? e.transitions[e.ntransitions - 1].time : 0., high = 1.;
+        double low = 0., high = 1.;
+        if(!solid && e.ntransitions == 1){
+            // A single point: halfway to the end of the duration, or to its start when the point is already at the end.
+            const double t = e.transitions[0].time;
+            insert = t < 1. ? 1 : 0; low = t < 1. ? t : 0.; high = t < 1. ? 1. : t;
+        } else if(!solid && e.ntransitions){
+            // Halfway between the selected point and the next one. The last point, or no selection, uses the gap before it,
+            // so the duration never changes.
+            const int row = points->currentRow();
+            const uint32_t last = e.ntransitions - 2;
+            uint32_t gap = row >= 0 && uint32_t(row) < last ? uint32_t(row) : last;
+            const auto empty = [&](uint32_t g){ return !(e.transitions[g+1].time > e.transitions[g].time); };
+            // Coincident points leave no room: use the nearest gap that has some, searching forwards first.
+            if(empty(gap)){
+                uint32_t g = gap + 1;
+                while(g <= last && empty(g)) ++g;
+                if(g > last){ g = gap; while(g > 0 && empty(g)) --g; }
+                if(!empty(g)) gap = g;
+            }
+            insert = gap + 1; low = e.transitions[gap].time; high = e.transitions[gap+1].time;
+        }
         if(solid && e.ntransitions){
             // Find a free interval, starting after the selected block and wrapping around.
             const uint32_t blocks = e.ntransitions / 2;
@@ -1114,7 +1357,9 @@ void HwLightWidget::addTransition(){
             transitions[insert+n].time = solid ? e.ntransitions ? low + (high - low) * (n ? .75 : .25) : double(n) : (low + high) / 2.;
         }
         std::free(e.transitions); e.transitions = transitions; e.ntransitions += count;
+        if(!solid) added = int(insert);
     });
+    if(added >= 0 && added < points->rowCount()) points->selectRow(added);
 }
 
 void HwLightWidget::removeTransition(){

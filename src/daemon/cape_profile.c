@@ -309,16 +309,22 @@ static int parse_colour(const char* s, size_t n, cape_profile_colour* c){
     return i == n - 1;
 }
 
+// iCUE holds 8 bits a colour component and writes each from its float: a component is written as the nearest of those, as iCUE
+// would write it (the firmware rounds a component the same way, floor(c * 255 + 0.5): its files do not change)
+static double colour_component(double v){
+    return (double)(float)(floor(v * 255. + .5) / 255.);
+}
+
 static size_t format_colour(const cape_profile_colour* c, char* out, size_t cap){
     // Match QColor's float qFuzzyCompare(alphaF() + 1, 2) when choosing the archive spelling.
-    const float shifted_alpha = (float)(c->has_alpha ? c->c[3] : 1.) + 1.f;
+    const float shifted_alpha = (float)(c->has_alpha ? colour_component(c->c[3]) : 1.) + 1.f;
     const int has_alpha = c->has_alpha && fminf(fabsf(shifted_alpha), 2.f) < fabsf(shifted_alpha - 2.f) * 100000.f;
     size_t w = (size_t)snprintf(out, cap, has_alpha ? "rgba(" : "rgb(");
     const unsigned n = has_alpha ? 4 : 3;
     for(unsigned k = 0; k < n && w < cap; k++){
         if(k)
             out[w++] = ' ';
-        w += format_real(out + w, cap - w, c->c[k], 6);
+        w += format_real(out + w, cap - w, colour_component(c->c[k]), 6);
     }
     if(w + 2 > cap)
         return 0;
@@ -632,7 +638,7 @@ static int r_colour(fields* f, const char* tag, cape_profile_colour* v){
     TRY(field(f, tag, &node));
     TRY(rvalue(f->r, node, &s, &n));
     if(!parse_colour(s, n, v))
-        return rfail(f->r, node, CAPE_PROFILE_E_CORRUPT, "not a colour");
+        return rfail(f->r, node, CAPE_PROFILE_E_CORRUPT, "not a color");
     return CAPE_OK;
 }
 
@@ -656,7 +662,7 @@ static int r_optcolour(fields* f, const char* tag, cape_profile_optcolour* v){
     TRY(field(f, tag, &node));
     fields g = { f->r, node, f->r->t->nodes[node].first };
     if(f->r->t->nodes[node].flags & CAPE_XML_VALUE)
-        return rfail(f->r, node, CAPE_PROFILE_E_CORRUPT, "a value where an optional colour is expected");
+        return rfail(f->r, node, CAPE_PROFILE_E_CORRUPT, "a value where an optional color is expected");
     uint8_t null;
     TRY(r_bool(&g, "nullopt", &null));
     memset(v, 0, sizeof(*v));
@@ -907,7 +913,7 @@ static int r_colours(fields* f, uint32_t colours[2]){
     uint32_t node;
     TRY(field(f, "colors", &node));
     if(f->r->t->nodes[node].flags & (CAPE_XML_VALUE | CAPE_XML_DYNAMIC))
-        return rfail(f->r, node, CAPE_PROFILE_E_CORRUPT, "not a pair of colours");
+        return rfail(f->r, node, CAPE_PROFILE_E_CORRUPT, "not a pair of colors");
     fields g = { f->r, node, f->r->t->nodes[node].first };
     TRY(r_u32(&g, "first", &colours[0]));
     TRY(r_u32(&g, "second", &colours[1]));
@@ -976,9 +982,9 @@ const char* cape_profile_layer_error(const cape_profile_layer* l){
             return "transition time outside iCUE limits";
         for(unsigned c = 0; c < (t->colour.has_alpha ? 4u : 3u); ++c)
             if(!isfinite(t->colour.c[c]) || t->colour.c[c] < 0 || t->colour.c[c] > 1)
-                return "transition colour outside iCUE limits";
+                return "transition color outside iCUE limits";
     }
-    if(!cape_profile_solid_valid(e)) return "Solid blocks need paired points of one colour";
+    if(!cape_profile_solid_valid(e)) return "Solid blocks need paired points of one color";
     if(l->stop_after_times < -1 || l->stop_after_times > 99) return "repeat count outside iCUE limits";
     if(e->kind >= CAPE_PROFILE_SOLID && e->kind <= CAPE_PROFILE_RIPPLE){
         if(e->duration < 100 || e->duration > 99900 || e->duration % 100)
@@ -1012,7 +1018,7 @@ static int r_effect(rd* r, uint32_t data, klass k, cape_profile_effect* e){
         break;
     case C_SOLID:
         TRY(r_with_transitions(&f, e));
-        if(!cape_profile_solid_valid(e)) return rfail(r, data, CAPE_PROFILE_E_CORRUPT, "Solid blocks need paired points of one colour");
+        if(!cape_profile_solid_valid(e)) return rfail(r, data, CAPE_PROFILE_E_CORRUPT, "Solid blocks need paired points of one color");
         break;
     case C_GRADIENT:
         TRY(r_with_transitions(&f, e));
@@ -1359,7 +1365,7 @@ static int w_uuid(wr* w, uint32_t parent, const char* tag, const cape_profile_uu
 static int w_colour(wr* w, uint32_t parent, const char* tag, const cape_profile_colour* c){
     char v[128];
     if(!colour_ok(c))
-        return wfail(w, CAPE_PROFILE_E_CORRUPT, "%s: a colour component out of 0..1", tag);
+        return wfail(w, CAPE_PROFILE_E_CORRUPT, "%s: a color component out of 0..1", tag);
     const size_t n = format_colour(c, v, sizeof(v));
     return w_value(w, parent, tag, v, n);
 }
@@ -1542,7 +1548,7 @@ static int w_with_transitions(wr* w, uint32_t parent, const cape_profile_effect*
 static int w_effect(wr* w, uint32_t parent, const cape_profile_effect* e){
     if((unsigned)e->kind >= CAPE_PROFILE_EFFECTS)
         return wfail(w, CAPE_PROFILE_E_CORRUPT, "an effect of no kind the level has");
-    if(!cape_profile_solid_valid(e)) return wfail(w, CAPE_PROFILE_E_CORRUPT, "Solid blocks need paired points of one colour");
+    if(!cape_profile_solid_valid(e)) return wfail(w, CAPE_PROFILE_E_CORRUPT, "Solid blocks need paired points of one color");
     const klass k = (klass)((int)C_STATIC + (int)e->kind);
     uint32_t d;
     TRY(w_pointer(w, parent, "lighting", k, 0, &d));

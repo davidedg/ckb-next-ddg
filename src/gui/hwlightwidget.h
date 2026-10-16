@@ -16,10 +16,12 @@ class QTabWidget;
 class QTableWidget;
 class QDoubleSpinBox;
 class QSpinBox;
-class QComboBox;
 class ColorButton;
 class HwLightStrip;
 class QToolButton;
+class QButtonGroup;
+class QSlider;
+class QAbstractButton;
 
 // Edits only the local, complete lighting draft. Saving the slot is a separate operation.
 class HwLightWidget : public QWidget {
@@ -41,21 +43,24 @@ private:
     QListWidget* layers;
     QLabel *quota, *selectionNote, *mutedNote, *emptyNote;
     QCheckBox* allKeys;
-    QPushButton *clear, *remove, *up, *down;
-    QToolButton* add;
+    QPushButton* clear;
+    QToolButton *add, *remove, *up, *down;
+    QWidget* keyboardBox;
     QStackedWidget* panels;
     ColorButton* staticColour;
     QDoubleSpinBox *opacity, *duration, *tail, *velocity;
+    QSlider* opacitySlider;
     QSpinBox *angle, *after;
     QCheckBox* twoSides;
-    QComboBox *start, *stop;
+    QButtonGroup *start, *stop;
     QTabWidget* customTabs;
     QTableWidget* points;
     HwLightStrip* strip;
     QPushButton *addPoint, *removePoint;
-    QComboBox *colourMode, *speed, *direction, *typeMode, *typeDuration;
+    QSlider *speed, *typeDuration;
+    QButtonGroup *colourMode, *direction, *rotation, *typeMode;
     ColorButton* presetColours[2];
-    QWidget *colourRow, *directionRow, *typeRow, *typeDurationRow, *speedRow;
+    QWidget *colourModeRow, *colourRow, *directionRow, *rotationRow, *typeRow, *typeDurationRow, *speedRow;
 
     cape_profile_layer* selected();
     void mutate(const std::function<void(cape_profile_layer&)>& change, bool refresh = true);
@@ -77,6 +82,12 @@ private:
     void addTransition();
     void removeTransition();
     void setPointTime(int row, int end, double time);
+    void fitKeyboard();
+    void sizeChoices();
+
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+    void changeEvent(QEvent* event) override;
 };
 
 #endif

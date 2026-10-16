@@ -882,10 +882,11 @@ static const cape_hwbind_record* record_of(usbdevice* kb, struct cape_state* cs,
         return &cs->rec[slot];
     cape_hwbind_free(&cs->rec[slot]);
     cs->rec_ok[slot] = 0;
-    uint16_t name[CAPE_INFO_NAME_UNITS];
+    // Room for a name that fills the whole area: iCUE writes one without a terminator
+    uint16_t name[CAPE_INFO_NAME_UNITS + 1];
     int units = -1;
     if(img->present && img->info_ok)
-        units = cape_info_get_name(&img->info, name, CAPE_INFO_NAME_UNITS);
+        units = cape_info_get_name(&img->info, name, sizeof(name) / sizeof(name[0]));
     uint8_t entry[CAPE_SLOTID_SIZE], ind[CAPE_IND_COUNT * 3];
     cape_slotid_build(&img->id, entry, sizeof(entry));
     memcpy(ind, img->light.ind, sizeof(ind));

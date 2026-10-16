@@ -969,7 +969,7 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
         }
     }
     if(prc == CAPE_LIGHT_E_COLOURS && !plan->keeps_lighting){
-        put_reason(plan->reason, sizeof(plan->reason), "%u colours other than black: a profile holds at most %d", pk.colours,
+        put_reason(plan->reason, sizeof(plan->reason), "%u colors other than black: a profile holds at most %d", pk.colours,
                    CAPE_LAYERS_MAX);
         return CAPE_OK;
     }

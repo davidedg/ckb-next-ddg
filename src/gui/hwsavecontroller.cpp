@@ -1,4 +1,5 @@
 #include "hwsavecontroller.h"
+#include "hwbinding.h"
 
 #include <QMessageBox>
 #include <QProgressDialog>
@@ -80,8 +81,12 @@ bool HwSaveController::start(const std::vector<HwSaveFlow::Slot>& saveSlots, boo
     if(active_ || !device_ || !device_->begin()) return false;
     active_ = true; uncertain_ = false; rgbRequired_ = rgbRequired;
     names_ = std::array<QString, 3>();
+    shortened_ = std::array<bool, 3>();
     for(const HwSaveFlow::Slot& slot : saveSlots)
-        if(slot.mode >= 1 && slot.mode <= 3) names_[slot.mode - 1] = QString::fromStdString(slot.name);
+        if(slot.mode >= 1 && slot.mode <= 3){
+            names_[slot.mode - 1] = QString::fromStdString(slot.name);
+            shortened_[slot.mode - 1] = slot.name_shortened;
+        }
     clock_.start();
     if(!flow_.start(saveSlots, all, clock_.elapsed())){
         device_->end(); active_ = false; return false;
@@ -251,6 +256,9 @@ void HwSaveController::finish(const QString& reason){
         else lines << tr("M%1: %2").arg(outcome.mode).arg(QString::fromStdString(HwSaveFlow::outcome_text(outcome)));
         const QString what = meaning(outcome);
         if(!what.isEmpty()) lines << "    " + what;
+        if(outcome.verdict == "written" && outcome.mode >= 1 && outcome.mode <= 3 && shortened_[outcome.mode - 1])
+            lines << "    " + tr("Its name was shortened to %1 characters, the longest that iCUE reads back correctly.")
+                                   .arg(HwBinding::NAME_UNITS);
         if(outcome.verdict == "refused" && !outcome.detail.empty()) lines << "    " + QString::fromStdString(outcome.detail);
     }
     if(flow_.check_only())

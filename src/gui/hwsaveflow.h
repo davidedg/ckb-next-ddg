@@ -20,6 +20,7 @@ public:
     struct Slot {
         unsigned mode = 0;                 // GUI mode, 1..3
         std::string name;                  // the name the slot is saved with (for the warning in words, by the caller)
+        bool name_shortened = false;       // the slot's name filled PROFILE.I: it is saved shortened, and the result says so
         std::vector<std::string> prepare; // complete, validated daemon command lines, including newline
         // hwslot: the whole "@N hwslot check:/save:/abort:" lines of the slot's transaction (prepare holds its
         // "@N hwslot" preparation lines). All three command lines are mandatory.

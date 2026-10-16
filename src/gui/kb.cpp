@@ -1238,6 +1238,7 @@ bool Kb::k95SaveSlots(bool all, int selected, std::vector<HwSaveFlow::Slot>& sav
     }
     // A transaction of its own for each slot (a begin ends every open one with the same number): never 0, never the same
     const uint32_t txn = uint32_t(Q_RAND()) & 0xfffffff0u;
+    std::vector<std::pair<int, QString>> shortened;   // the names saved shortened, given to their modes once every slot is prepared
     for(int i = 0; i < 3; ++i){
         if(!all && i != selected)
             continue;
@@ -1254,16 +1255,30 @@ bool Kb::k95SaveSlots(bool all, int selected, std::vector<HwSaveFlow::Slot>& sav
             return false;
         }
         KbMode* mode = _hwProfile->at(i);
+        // A name that fills the whole of PROFILE.I has no end mark (iCUE writes a long name so, and reads it back with a stray
+        // character at its end): a save that rewrites the slot anyway writes the longest name that keeps one, without splitting a
+        // surrogate pair. The mode takes it too, so that the read-back of the save holds what was saved.
+        QString name = mode->name();
+        const bool shorten = name.size() > int(HwBinding::NAME_UNITS) && k95DraftModified(i);
+        if(shorten){
+            name.truncate(int(HwBinding::NAME_UNITS));
+            if(name.at(name.size() - 1).isHighSurrogate())
+                name.chop(1);
+            name = name.trimmed();
+        }
         K95PStage stage;
         std::string error;
-        if(!makeK95PStage(_hwProfile->keyMap(), mode->name(), k95BaseName(i),
+        if(!makeK95PStage(_hwProfile->keyMap(), name, k95BaseName(i),
                           *record, k95Drafts[size_t(i)], unsigned(i + 1), unsigned(notifyNumber), txn | unsigned(i + 1), stage, error)){
             why = tr("M%1 cannot be prepared: %2").arg(i + 1).arg(QString::fromStdString(error));
             return false;
         }
+        if(shorten)
+            shortened.emplace_back(i, name);
         HwSaveFlow::Slot slot;
         slot.mode = unsigned(i + 1);
-        slot.name = mode->name().toStdString();
+        slot.name = name.toStdString();
+        slot.name_shortened = shorten;
         slot.prepare = stage.prepare;
         slot.check_line = stage.check;
         slot.save_line = stage.save;
@@ -1273,6 +1288,10 @@ bool Kb::k95SaveSlots(bool all, int selected, std::vector<HwSaveFlow::Slot>& sav
     if(saveSlots.empty()){
         why = tr("No slot was read from the keyboard yet: select a mode to read it.");
         return false;
+    }
+    for(const auto& s : shortened){
+        _hwProfile->at(s.first)->name(s.second);
+        k95DraftChanged(s.first);
     }
     return true;
 }

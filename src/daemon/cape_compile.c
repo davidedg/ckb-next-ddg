@@ -510,7 +510,7 @@ static int layer_cells(const cape_profile_layer* l, int layout, uint8_t cells[CA
         if(cell == CAPE_PROFILE_NONE){
             const int led = cape_profile_led(name->p, name->len);
             if(led == CAPE_LED_PROFILE || led == CAPE_LED_BRIGHTNESS || led == CAPE_LED_WINLOCK)
-                return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "the light \"%s\" in a layer: its colour is an indicator's", str(name));
+                return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "the light \"%s\" in a layer: its color is an indicator's", str(name));
             for(int other = CAPE_PROFILE_LAYOUT_ANSI; other <= CAPE_PROFILE_LAYOUT_KS; other++)
                 if(cape_profile_light(name->p, name->len, other, NULL) != CAPE_PROFILE_NONE)
                     return fail(why, CAPE_COMPILE_E_NOCELL, "the light \"%s\" is not one of layout %d", str(name), layout);
@@ -739,9 +739,9 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
         for(uint32_t t = 0; t < e->ntransitions; t++){
             for(unsigned c = 0; c < (e->transitions[t].colour.has_alpha ? 4u : 3u); ++c)
                 if(!isfinite(e->transitions[t].colour.c[c]) || e->transitions[t].colour.c[c] < 0 || e->transitions[t].colour.c[c] > 1)
-                    return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "invalid animation colour");
+                    return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "invalid animation color");
             if(!(e->transitions[t].time >= 0 && e->transitions[t].time <= 1) || (t && e->transitions[t].time < e->transitions[t - 1].time))
-                return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "layer %u: its colours are not in order of time", f);
+                return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "layer %u: its colors are not in order of time", f);
         }
         if(e->kind != CAPE_PROFILE_STATIC){
             out->effects = 1;
@@ -755,7 +755,7 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
             continue;
         }
         if(e->ntransitions != 1)
-            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a static layer of %u colours", (unsigned)e->ntransitions);
+            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a static layer of %u colors", (unsigned)e->ntransitions);
         if(!l->start_with_profile || l->start_on_key_press || l->stop_on_key_press || l->stop_on_key_release
            || (l->stop_after_times != -1 && l->stop_after_times != 0))
             return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a static layer that starts or stops on a key");
@@ -1566,7 +1566,7 @@ static int import_lighting(const cape_slot_files* files, const cape_profile_prof
             return CAPE_E_CAP;
     out->advanced = base ? base->advanced : 1;
     if(cape_compile_lighting_build(out, o->layout, &lt, NULL) != CAPE_OK || !lighting_same(files, &lt))
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "lighting layers that are not the ones iCUE writes for their keys and colours");
+        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "lighting layers that are not the ones iCUE writes for their keys and colors");
     return CAPE_OK;
 }
 

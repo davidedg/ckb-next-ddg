@@ -155,12 +155,15 @@ void KbProfileDialog::on_profileList_customContextMenuRequested(const QPoint &po
     QAction* movedown = new QAction(tr("Move Down"), this);
     if(index >= profiles.count() - 1)
         movedown->setEnabled(false);
-    menu.addAction(rename);
-    menu.addAction(duplicate);
-    menu.addAction(del);
-    menu.addSeparator();
-    menu.addAction(hwsave);
-    menu.addSeparator();
+    // The hardware profile of the slots only moves among the other profiles: its slots are renamed in the profile's own list
+    if(manage){
+        menu.addAction(rename);
+        menu.addAction(duplicate);
+        menu.addAction(del);
+        menu.addSeparator();
+        menu.addAction(hwsave);
+        menu.addSeparator();
+    }
     menu.addAction(moveup);
     menu.addAction(movedown);
     QAction* result = menu.exec(QCursor::pos());

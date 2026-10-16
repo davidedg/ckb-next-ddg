@@ -26,6 +26,27 @@
 #include "modeselectdialog.h"
 #include "macroreader.h"
 #include <QPushButton>
+#include <QLineEdit>
+#include <QStyledItemDelegate>
+#include "hwbinding.h"
+#include "modelistwidget.h"
+
+namespace {
+// The name of a hardware slot has to fit PROFILE.I: its editor takes no more UTF-16 units than a save can write
+class SlotNameDelegate : public ModeNameDelegate {
+public:
+    SlotNameDelegate(Kb* kb, ModeListWidget* view) : ModeNameDelegate(view), device(kb) {}
+    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        QWidget* editor = ModeNameDelegate::createEditor(parent, option, index);
+        if(auto* line = qobject_cast<QLineEdit*>(editor))
+            if(device->isHwSlotProfile(device->currentProfile()))
+                line->setMaxLength(int(HwBinding::NAME_UNITS));
+        return editor;
+    }
+private:
+    Kb* device;
+};
+}
 
 KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector) :
     QWidget(parent),
@@ -157,6 +178,7 @@ KbWidget::KbWidget(QWidget *parent, Kb *_device, XWindowDetector* windowDetector
     defaultProfileBoxPalette = ui->profileBox->palette();
     Q_ASSERT(ui->pollRateBox->count() == Kb::POLLRATE_COUNT);
     ui->modesList->setDevice(device);
+    ui->modesList->setItemDelegateForColumn(ModeListTableModel::COL_MODE_NAME, new SlotNameDelegate(device, ui->modesList));
     connect(device, &Kb::profileRenamed, this, &KbWidget::updateProfileList);
     connect(device, &Kb::profileAdded, this, &KbWidget::updateProfileList);
     connect(device, &Kb::modeChanged, this, &KbWidget::modeChanged);
@@ -476,15 +498,18 @@ void KbWidget::on_modesList_customContextMenuRequested(const QPoint& pos){
     if(row >= currentProfile->modeCount() - 1 || !canMove)
         movedown->setEnabled(false);
     menu.addAction(rename);
-    menu.addAction(duplicate);
-    menu.addAction(del);
+    // The hardware slots are fixed: only their names can change.
+    if(!device->isHwSlotProfile(currentProfile)){
+        menu.addAction(duplicate);
+        menu.addAction(del);
 #ifdef USE_XCB_EWMH
-    menu.addSeparator();
-    menu.addAction(focusevts);
-    menu.addSeparator();
+        menu.addSeparator();
+        menu.addAction(focusevts);
+        menu.addSeparator();
 #endif
-    menu.addAction(moveup);
-    menu.addAction(movedown);
+        menu.addAction(moveup);
+        menu.addAction(movedown);
+    }
     ui->modesList->setIgnoreFocusLoss(true);
     QAction* result = menu.exec(QCursor::pos());
     ui->modesList->setIgnoreFocusLoss(false);

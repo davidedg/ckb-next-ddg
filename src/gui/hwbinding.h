@@ -19,7 +19,8 @@ constexpr unsigned WORD_MAX = 400;
 constexpr unsigned TEXT_MAX = 300;      // encoded bytes of the text of one name word
 constexpr unsigned EVENT_BYTES = 128;   // bytes of the events of one e:/ev: word (cape_hwslot.h)
 constexpr unsigned NAME_WORDS = 8;
-constexpr unsigned NAME_UNITS = 114;    // UTF-16 units of a profile name
+constexpr unsigned NAME_UNITS = 114;    // UTF-16 units of a profile name the GUI writes (PROFILE.I keeps a terminator)
+constexpr unsigned READ_NAME_UNITS = 115;   // and of one it reads: iCUE fills the whole area of a long name
 constexpr unsigned TX_WORDS = 48;       // tx: words of one string at most
 // 'Imitate holding key' on press: the longest interval a file can say (the delay c0 ff ff ff), and iCUE's longest (99 999 s)
 constexpr unsigned long IMITATE_FILE_MAX = 16777215, IMITATE_MAX = 99999000;

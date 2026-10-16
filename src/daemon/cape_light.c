@@ -305,13 +305,13 @@ unsigned cape_light_unmapped(const cape_light_image* img){
 const char* cape_light_strerror(int err){
     switch(err){
     case CAPE_LIGHT_E_MIXED:
-        return "the colours of the layer differ from key to key";
+        return "the colors of the layer differ from key to key";
     case CAPE_LIGHT_E_MANY:
-        return "the layer lists more keys than it has colours";
+        return "the layer lists more keys than it has colors";
     case CAPE_LIGHT_E_COLOURS:
-        return "more colours than a profile has layers";
+        return "more colors than a profile has layers";
     case CAPE_LIGHT_E_ORDER:
-        return "a colour of the picture is not in the order given";
+        return "a color of the picture is not in the order given";
     default:
         return cape_strerror(err);
     }

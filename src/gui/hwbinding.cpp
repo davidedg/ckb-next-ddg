@@ -114,7 +114,7 @@ bool text_words(const std::vector<std::string>& w, size_t& i, const std::string&
 bool name_words(const std::vector<std::string>& w, size_t& i, const char* prefix, std::string& name, std::string& err){
     size_t units = 0;
     if(!text_words(w, i, prefix, NAME_WORDS, name, err)) return false;
-    if(!validUtf8(name, &units) || units > NAME_UNITS){ err = "a name that is not UTF-8, or too long"; return false; }
+    if(!validUtf8(name, &units) || units > READ_NAME_UNITS){ err = "a name that is not UTF-8, or too long"; return false; }
     return true;
 }
 

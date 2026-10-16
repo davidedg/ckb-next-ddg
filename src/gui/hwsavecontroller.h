@@ -38,6 +38,7 @@ private:
     HwSaveFlow flow_;
     std::array<bool, 3> rgbRequired_{{false, false, false}};
     std::array<QString, 3> names_;                       // the names the slots are saved with, for the warning
+    std::array<bool, 3> shortened_{};                    // and whether a name is saved shortened, for the result
     bool active_ = false;
     bool uncertain_ = false;
     bool refreshPendingSend_ = false;
