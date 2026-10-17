@@ -390,10 +390,10 @@ protected:
         const QPointF c = QRectF(rect()).center();
         const double s = std::min(width(), height()) * .2;
         switch(glyph){
-        case Up: painter.drawPolyline(QPolygonF{c + QPointF(-s, s/2), c + QPointF(0, -s/2), c + QPointF(s, s/2)}); break;
-        case Down: painter.drawPolyline(QPolygonF{c + QPointF(-s, -s/2), c + QPointF(0, s/2), c + QPointF(s, -s/2)}); break;
-        case Left: painter.drawPolyline(QPolygonF{c + QPointF(s/2, -s), c + QPointF(-s/2, 0), c + QPointF(s/2, s)}); break;
-        case Right: painter.drawPolyline(QPolygonF{c + QPointF(-s/2, -s), c + QPointF(s/2, 0), c + QPointF(-s/2, s)}); break;
+        case Up: painter.drawPolyline(QPolygonF() << c + QPointF(-s, s/2) << c + QPointF(0, -s/2) << c + QPointF(s, s/2)); break;
+        case Down: painter.drawPolyline(QPolygonF() << c + QPointF(-s, -s/2) << c + QPointF(0, s/2) << c + QPointF(s, -s/2)); break;
+        case Left: painter.drawPolyline(QPolygonF() << c + QPointF(s/2, -s) << c + QPointF(-s/2, 0) << c + QPointF(s/2, s)); break;
+        case Right: painter.drawPolyline(QPolygonF() << c + QPointF(-s/2, -s) << c + QPointF(s/2, 0) << c + QPointF(-s/2, s)); break;
         case Plus: painter.drawLine(c + QPointF(-s, 0), c + QPointF(s, 0)); painter.drawLine(c + QPointF(0, -s), c + QPointF(0, s)); break;
         case Minus: painter.drawLine(c + QPointF(-s, 0), c + QPointF(s, 0)); break;
         case Clockwise:
@@ -406,7 +406,7 @@ protected:
             const QPointF along(std::sin(end), std::cos(end)), out(std::cos(end), -std::sin(end));
             const double a = s * .9;
             painter.setBrush(ink); painter.setPen(Qt::NoPen);
-            painter.drawPolygon(QPolygonF{at + along * a, at - along * (a * .3) + out * (a * .75), at - along * (a * .3) - out * (a * .75)});
+            painter.drawPolygon(QPolygonF() << at + along * a << at - along * (a * .3) + out * (a * .75) << at - along * (a * .3) - out * (a * .75));
             break;
         }
         }
@@ -430,6 +430,7 @@ protected:
 private:
     KeyWidget* keyboard;
 };
+constexpr int KeyboardBox::MinimumHeight;
 
 // A short slider with its marks named underneath: the first name at the left end, the last at the right, others between.
 QWidget* scale(QWidget* parent, const char* name, QSlider*& slider, int min, int max, int tick, const QStringList& names){
