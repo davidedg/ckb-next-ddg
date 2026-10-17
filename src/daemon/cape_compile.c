@@ -1466,7 +1466,8 @@ static int lighting_same(const cape_slot_files* files, const cape_compile_lighti
 
 static int import_lighting(const cape_slot_files* files, const cape_profile_profile* base, cape_compile_import_opts* o,
                            cape_profile_profile* out, char* why){
-    static cape_compile_lighting lt;
+    // Not static: the daemon imports on the thread of each keyboard, and two keyboards may import at once
+    cape_compile_lighting lt;
     if(o->lighting){
         cape_lightmodel copy = {0};
         if(!o->lighting->known) return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "unknown replacement lighting");
