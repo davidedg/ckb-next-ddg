@@ -25,7 +25,7 @@ constexpr unsigned TX_WORDS = 48;       // tx: words of one string at most
 // 'Imitate holding key' on press: the longest interval a file can say (the delay c0 ff ff ff), and iCUE's longest (99 999 s)
 constexpr unsigned long IMITATE_FILE_MAX = 16777215, IMITATE_MAX = 99999000;
 
-enum Subtype : uint8_t { MACRO = 0, SHORTCUT = 1, TEXT = 3 };
+enum Subtype : uint8_t { SUBTYPE_MACRO = 0, SUBTYPE_SHORTCUT = 1, SUBTYPE_TEXT = 3 };
 enum Flag : unsigned { SHARED = 0x01, NONCANONICAL = 0x02, LOCKED = 0x04 };
 
 // One event of a macro file, as in the file: 2 bytes, or 4 when bit 6 of the first byte is set (corsair-protocol formats/cape/macro.md).

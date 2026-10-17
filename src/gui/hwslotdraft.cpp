@@ -219,7 +219,7 @@ bool deserialize(const std::string& line, Draft& d){
                 if(ok) a.events.push_back(ev);
             }
             // an interval only for the longest Imitate, a string only for a Text
-            ok = ok && (!a.imitateMs || a.longestImitate()) && (a.text.empty() || a.subtype == HwBinding::TEXT);
+            ok = ok && (!a.imitateMs || a.longestImitate()) && (a.text.empty() || a.subtype == HwBinding::SUBTYPE_TEXT);
         } else
             ok = false;
     }

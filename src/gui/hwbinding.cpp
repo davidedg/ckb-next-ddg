@@ -493,8 +493,8 @@ static bool readRecord(const std::vector<std::string>& w, Record& out, std::stri
         }
         // The string of a Text
         if(next("tx:")){
-            if(a.subtype != TEXT || !text_words(w, i, std::string("tx") + key, TX_WORDS, a.text, err) || a.text.empty()){
-                if(err.empty() || a.subtype != TEXT) err = "a malformed tx word";
+            if(a.subtype != SUBTYPE_TEXT || !text_words(w, i, std::string("tx") + key, TX_WORDS, a.text, err) || a.text.empty()){
+                if(err.empty() || a.subtype != SUBTYPE_TEXT) err = "a malformed tx word";
                 return false;
             }
         }

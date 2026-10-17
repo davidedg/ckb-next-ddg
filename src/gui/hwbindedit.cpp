@@ -25,14 +25,14 @@ std::string hex2(unsigned v){
 } // namespace
 
 bool canonicalValues(uint8_t subtype, uint8_t start, uint8_t run, uint8_t repeat){
-    if(subtype == HwBinding::SHORTCUT && start == START_PRESS && run == RUN_IMITATE_TOGGLE && repeat == 0)
+    if(subtype == HwBinding::SUBTYPE_SHORTCUT && start == START_PRESS && run == RUN_IMITATE_TOGGLE && repeat == 0)
         return true;   // 'Imitate holding key' Toggle
     if(repeat != 1)
         return false;
-    if(subtype == HwBinding::MACRO)
+    if(subtype == HwBinding::SUBTYPE_MACRO)
         return (start == START_PRESS && (run == RUN_ONCE || run == RUN_WHILE_PRESSED || run == RUN_TOGGLE))
                || (start == START_RELEASE && run == RUN_ONCE);   // iCUE's four alternatives
-    if(subtype == HwBinding::SHORTCUT || subtype == HwBinding::TEXT)
+    if(subtype == HwBinding::SUBTYPE_SHORTCUT || subtype == HwBinding::SUBTYPE_TEXT)
         return start == START_PRESS && run == RUN_ONCE;
     return false;
 }
@@ -50,7 +50,7 @@ bool isKey(const Event& e){
 // 'Imitate holding key': a Keystroke (subtype 01) of a key pressed, a delay and the key released, run 84 (Toggle, a delay of 0) or a
 // delay that is not 0 (On press). The other Keystrokes are iCUE's Keystroke
 bool imitateShape(const Action& a){
-    if(a.kind != Action::MACRO || a.subtype != HwBinding::SHORTCUT) return false;
+    if(a.kind != Action::MACRO || a.subtype != HwBinding::SUBTYPE_SHORTCUT) return false;
     if(a.run == RUN_IMITATE_TOGGLE) return true;
     return a.events.size() == 3 && !(HwBinding::eventKind(a.events[1]) == HwBinding::EV_DELAY && HwBinding::delayMs(a.events[1]) == 0);
 }
@@ -88,7 +88,7 @@ bool recognizeImitate(const Action& a, uint8_t& key, unsigned& ms, bool& toggle)
 Action imitatePress(uint8_t key, unsigned ms){
     Action a;
     a.kind = Action::MACRO;
-    a.subtype = HwBinding::SHORTCUT;
+    a.subtype = HwBinding::SUBTYPE_SHORTCUT;
     a.start = START_PRESS;
     a.run = RUN_ONCE;
     a.repeat = 1;
@@ -114,14 +114,14 @@ Kind kindOf(const Action& a){
         return KEPT;
     }
     if(!canonicalValues(a.subtype, a.start, a.run, a.repeat)) return KEPT;
-    if(a.subtype == HwBinding::SHORTCUT){
+    if(a.subtype == HwBinding::SUBTYPE_SHORTCUT){
         uint8_t key; unsigned ms; bool toggle;
         if(imitateShape(a)) return recognizeImitate(a, key, ms, toggle) ? (toggle ? IMITATE_TOGGLE : IMITATE_PRESS) : KEPT;
         if(a.run != RUN_ONCE) return KEPT;
         std::vector<uint8_t> keys;
         return recognizeShortcut(a.events, keys) && isCanonicalShortcut(keys) && keystrokeKeysOffered(keys) ? SHORTCUT : KEPT;
     }
-    if(a.subtype == HwBinding::MACRO){
+    if(a.subtype == HwBinding::SUBTYPE_MACRO){
         // every delay of 2 bytes and at most 4095 ms, a random one from at most to: as iCUE's editor makes them
         std::vector<Row> r;
         if(!rows(a.events, r)) return KEPT;
@@ -132,7 +132,7 @@ Kind kindOf(const Action& a){
         }
         return MACRO;
     }
-    if(a.subtype == HwBinding::TEXT){
+    if(a.subtype == HwBinding::SUBTYPE_TEXT){
         std::vector<HwTextShape::Stroke> strokes;
         unsigned ms = 0;
         return HwTextShape::recognize(a.events, strokes, ms) ? TEXT : KEPT;
@@ -335,14 +335,14 @@ static Action macroOf(uint8_t subtype, const std::vector<Event>& ev, uint8_t sta
     return a;
 }
 
-Action macro(const std::vector<Event>& ev, uint8_t start, uint8_t run){ return macroOf(HwBinding::MACRO, ev, start, run); }
+Action macro(const std::vector<Event>& ev, uint8_t start, uint8_t run){ return macroOf(HwBinding::SUBTYPE_MACRO, ev, start, run); }
 Action shortcut(const std::vector<uint8_t>& keys){
     std::vector<uint8_t> made = keys;
     std::string why;
     if(!shortcutKeys(made, why)) made = keys;   // check() says why
-    return macroOf(HwBinding::SHORTCUT, shortcutEvents(made), START_PRESS, RUN_ONCE);
+    return macroOf(HwBinding::SUBTYPE_SHORTCUT, shortcutEvents(made), START_PRESS, RUN_ONCE);
 }
-Action text(const std::vector<Event>& ev){ return macroOf(HwBinding::TEXT, ev, START_PRESS, RUN_ONCE); }
+Action text(const std::vector<Event>& ev){ return macroOf(HwBinding::SUBTYPE_TEXT, ev, START_PRESS, RUN_ONCE); }
 
 namespace {
 // The checks of one macro action, by its kind (the daemon's cape_binding_check, plus the shape of a Text's characters)
@@ -366,7 +366,7 @@ bool checkMacro(const Action& a, std::string& why){
     }
     for(unsigned k = 0; k < HwBinding::KEYS; ++k)
         if(down[k]){ why = K95PKeyTable::label(k) + " is pressed and never released"; return false; }
-    if(a.subtype == HwBinding::MACRO){
+    if(a.subtype == HwBinding::SUBTYPE_MACRO){
         for(const Event& e : a.events){
             const HwBinding::EventKind k = HwBinding::eventKind(e);
             if(k == HwBinding::EV_LONG || (k == HwBinding::EV_DELAY && HwBinding::delayMs(e) > MACRO_DELAY_MAX)){
@@ -385,7 +385,7 @@ bool checkMacro(const Action& a, std::string& why){
         }
         return true;
     }
-    if(a.subtype == HwBinding::SHORTCUT){
+    if(a.subtype == HwBinding::SUBTYPE_SHORTCUT){
         if(imitateShape(a)){
             uint8_t key; unsigned ms; bool toggle;
             // iCUE's clamp of longer times is iCUE's too (a copy of one of its slots brings it), though the editor never makes it
@@ -408,7 +408,7 @@ bool checkMacro(const Action& a, std::string& why){
         if(!keystrokeKeysOffered(keys)){ why = "a shortcut has a key of iCUE's keyboard (no media key)"; return false; }
         return true;
     }
-    if(a.subtype == HwBinding::TEXT){
+    if(a.subtype == HwBinding::SUBTYPE_TEXT){
         std::vector<HwTextShape::Stroke> strokes;
         unsigned ms = 0;
         if(!HwTextShape::recognize(a.events, strokes, ms)){
