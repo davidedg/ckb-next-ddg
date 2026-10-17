@@ -1,5 +1,24 @@
 # Change Log
 
+## [v0.6.2.ddg.7](https://github.com/davidedg/ckb-next-ddg/tree/v0.6.2.ddg.7) (2026-10-17)
+[Full Changelog](https://github.com/davidedg/ckb-next-ddg/compare/v0.6.2.ddg.6...v0.6.2.ddg.7)
+
+Release of the fork [davidedg/ckb-next-ddg](https://github.com/davidedg/ckb-next-ddg), based on ckb-next v0.6.2.
+
+Features:
+- K95 RGB Platinum: complete editing of the on-board profiles, still experimental and off unless the daemon is started with `--enable-experimental`. Every save also writes a coherent `PROFILE.ZIP`, the model that iCUE imports, and slots edited in iCUE are read back from it. Lighting: Static, Solid, Gradient, Ripple and Wave in up to five custom layers, or one of the eight firmware presets, in a reworked editor.
+- K95 RGB Platinum: a draft for each slot, Check before saving, Save selected and Save ALL, an explicit Retry after an error, and Reload Slot.
+- K95 RGB Platinum: slot names of up to 114 characters; the 115-character names iCUE can write are read, and shortened with a note when the slot is saved again.
+- K95 RGB Platinum: a note under the list of hardware slots says that the active slot is chosen with the profile key on the keyboard.
+
+Bug fixes:
+- K95 RGB Platinum: two keyboards checked or saved at the same time no longer share the buffer of the lighting import, which could be written past its end.
+- K95 RGB Platinum: the GUI writes and verifies a backup of its settings before migrating those of the hardware profile.
+- Daemon: macro playback keeps its objects and drains the command FIFO of each device; random delays include their upper bound and explicit zero waits are kept; temporary actions of an empty macro are freed.
+- Daemon: the PID file is validated before probing a process, and names with non-ASCII bytes are read back correctly.
+- GUI: profile and mode names are escaped byte by byte on every device; new profiles are named "Unnamed" from the start; the mode name editor keeps its width and stays clear of the icon column; the name column of the mode list no longer overflows.
+- Builds with clang up to version 18 and `-DWERROR=ON`; kissfft no longer warns with `-Wcast-align`.
+
 ## [v0.6.2.ddg.6](https://github.com/davidedg/ckb-next-ddg/tree/v0.6.2.ddg.6) (2026-10-03)
 [Full Changelog](https://github.com/davidedg/ckb-next-ddg/compare/v0.6.2.ddg.5...v0.6.2.ddg.6)
 
