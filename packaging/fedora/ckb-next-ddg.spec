@@ -13,7 +13,7 @@
 %global base_version 0.6.2
 
 Name:           ckb-next-ddg
-Version:        0.6.2.ddg.7
+Version:        0.6.2.ddg.8
 Release:        1%{?dist}
 Summary:        Corsair Keyboard and Mouse RGB Driver -- ddg fork (device-scoped profile/mode CLI, WITH_ENV_VARS)
 
@@ -166,6 +166,11 @@ udevadm control --reload-rules 2>&1 > /dev/null || :
 
 
 %changelog
+* Sun Oct 18 2026 Davide Del Grande <delgrande.davide@gmail.com> - 0.6.2.ddg.8-1
+- K95 RGB Platinum: composed Keystroke events and all Language key destinations
+- Preserve editable hardware binding models and match iCUE action encoding
+- Accept hardware profiles with non-interrupting macros saved by iCUE
+
 * Sat Oct 17 2026 Davide Del Grande <delgrande.davide@gmail.com> - 0.6.2.ddg.7-1
 - K95 RGB Platinum: complete on-board profile editing with PROFILE.ZIP for iCUE (experimental)
 - K95 RGB Platinum: lighting effects in custom layers or firmware presets, reworked editor

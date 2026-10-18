@@ -1,5 +1,21 @@
 # Change Log
 
+## [v0.6.2.ddg.8](https://github.com/davidedg/ckb-next-ddg/tree/v0.6.2.ddg.8) (2026-10-18)
+[Full Changelog](https://github.com/davidedg/ckb-next-ddg/compare/v0.6.2.ddg.7...v0.6.2.ddg.8)
+
+Release of the fork [davidedg/ckb-next-ddg](https://github.com/davidedg/ckb-next-ddg), based on ckb-next v0.6.2.
+
+Features:
+- K95 RGB Platinum: composed Keystroke events in hardware macros, with direct Set type: Press / Release / Keystroke actions in the event table's context menu.
+- K95 RGB Platinum: all 21 Language key destinations are available. The 12 destinations that iCUE writes as Esc are labelled accordingly; their distinct names remain in the editable profile.
+
+Bug fixes:
+- K95 RGB Platinum: hardware slots saved by iCUE with non-interrupting macros can be read and edited instead of being treated as unsupported. Action options that do not affect the hardware files remain in PROFILE.ZIP when an action is edited.
+- K95 RGB Platinum: preserve composed and multi-key macro events and symbolic remap destinations across drafts and save preparation, including changes that affect only PROFILE.ZIP.
+- K95 RGB Platinum: match iCUE's hardware encoding of text, macro events and shortcut order, and preserve the profile's encryption setting in the Win Lock mask. Static lighting leaves indicator LEDs out of its key cells as iCUE does.
+
+The on-board profile editor remains experimental and off unless the daemon is started with `--enable-experimental`. Compatibility remains limited to the qualified firmware and the exercised scenes described in the README.
+
 ## [v0.6.2.ddg.7](https://github.com/davidedg/ckb-next-ddg/tree/v0.6.2.ddg.7) (2026-10-17)
 [Full Changelog](https://github.com/davidedg/ckb-next-ddg/compare/v0.6.2.ddg.6...v0.6.2.ddg.7)
 
