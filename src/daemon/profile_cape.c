@@ -563,6 +563,7 @@ static int txn_edit(usbdevice* kb, const cape_stage_txn* t, unsigned slot, int f
     memcpy(ce->guid, t->guid, sizeof(ce->guid));
     ce->e.guid = ce->guid;
     ce->e.seed = t->seed;
+    ce->e.shapes = (const char* const*)t->shapes;
     ce->e.hold = t->hold;
     ce->e.nhold = t->nhold;
     ce->e.force = force;

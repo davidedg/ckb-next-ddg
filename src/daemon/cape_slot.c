@@ -729,6 +729,7 @@ static void plan_zip(const cape_slot_image* old, const cape_slot_edit* edit, cap
         o.random_ctx = &ids;
     }
     o.lighting = edit->lighting;
+    o.shapes = edit->shapes;
     o.hold = edit->hold;
     o.nhold = edit->nhold;
     cape_profile_profile m;
@@ -855,8 +856,8 @@ int cape_slot_plan_build(const cape_slot_image* old, const cape_slot_edit* edit,
     // A slot read from its ZIP is saved with one, made of iCUE's model: what the model cannot say is not written
     const int zip = old->from_zip;
     int files_same = 0;   // the files to write are the slot's (then only the model can make it a write)
-    if(zip && edit->has_winlock && (edit->winlock & 0xf0)){
-        put_reason(plan->reason, sizeof(plan->reason), "Win Lock options %02x: iCUE has none in bits 4 to 7", edit->winlock);
+    if(zip && edit->has_winlock && (edit->winlock & ~CAPE_WINLOCK_KNOWN)){
+        put_reason(plan->reason, sizeof(plan->reason), "Win Lock options %02x: iCUE has none in bits 5 to 7", edit->winlock);
         return CAPE_OK;
     }
     // The performance settings to write: the edit's, else the slot's, else iCUE's defaults (a new profile, a PROFILE.DAT or

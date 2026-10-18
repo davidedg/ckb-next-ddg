@@ -121,6 +121,7 @@ std::string serialize(const Draft& d){
         const HwBinding::Action& a = d.keys[k];
         if(a.kind == HwBinding::Action::REMAP){
             out << " m:"; hex2(out, k); out << ':'; hex2(out, a.dst);
+            if(!a.shape.empty()) out << ":bs=" << HwBinding::encode(a.shape);
         } else if(a.kind == HwBinding::Action::MACRO){
             out << " a:"; hex2(out, k);
             for(unsigned v : {unsigned(a.subtype), unsigned(a.start), unsigned(a.run), unsigned(a.repeat)}){ out << ':'; hex2(out, v); }
@@ -131,6 +132,7 @@ std::string serialize(const Draft& d){
             }
             if(a.imitateMs) out << ":im=" << a.imitateMs;
             if(!a.text.empty()) out << ":tx=" << HwBinding::encode(a.text);
+            if(!a.shape.empty()) out << ":bs=" << HwBinding::encode(a.shape);
         }
     }
     return out.str();
@@ -171,12 +173,19 @@ bool deserialize(const std::string& line, Draft& d){
     if(ok && !r.hasBindings && w.size() != bindings) ok = false;
     int last = -1;
     for(size_t i = bindings; ok && i < w.size(); ++i){
-        const std::vector<std::string> f = split(w[i], ':');
+        std::vector<std::string> f = split(w[i], ':');
+        std::string shape;
+        if(!f.empty() && f.back().compare(0, 3, "bs=") == 0){
+            ok = HwBinding::decode(f.back().substr(3), shape) && !shape.empty() && shape.size() <= HwBinding::SHAPE_WORDS * HwBinding::TEXT_MAX;
+            if(!ok) break;
+            f.pop_back();
+        }
         unsigned key = 0;
         ok = f.size() >= 3 && f[1].size() == 2 && byte(f[1], 0, key) && key < HwBinding::KEYS && int(key) > last;
         if(!ok) break;
         last = int(key);
         HwBinding::Action& a = r.keys[key];
+        a.shape = shape;
         if(f[0] == "m" && f.size() == 3){
             unsigned dst = 0;
             ok = f[2].size() == 2 && byte(f[2], 0, dst);

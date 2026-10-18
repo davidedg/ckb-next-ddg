@@ -99,7 +99,7 @@ static unsigned cut_text(const uint8_t* s, size_t n, size_t* end, unsigned max){
 }
 
 static void add_text_max(words* w, const char* prefix, const uint8_t* s, size_t n, unsigned max){
-    size_t end[CAPE_HWSLOT_TX_WORDS > CAPE_HWSLOT_NAME_WORDS ? CAPE_HWSLOT_TX_WORDS : CAPE_HWSLOT_NAME_WORDS];
+    size_t end[CAPE_HWSLOT_SHAPE_WORDS];
     const unsigned pieces = cut_text(s, n, end, max);
     if(!pieces){
         if(!w->err)
@@ -273,6 +273,21 @@ static void make_words(const cape_hwbind_slot* s, words* w){
                 a->nevents, a->flags);
             add_events(w, "e", k, a->events, a->nevents);
             add_model_words(w, s->model, k, a);
+        }
+    }
+    if(!ro){
+        for(unsigned k = 0; k < CAPE_BIND_K95_KEYS; ++k){
+            const cape_profile_action* a = model_action(s->model, k);
+            char* shape = NULL;
+            if(!a) continue;
+            const int shape_rc = cape_compile_shape(a, &shape);
+            if(shape_rc != CAPE_OK){ w->err = shape_rc; return; }
+            if(shape){
+                char prefix[8];
+                snprintf(prefix, sizeof(prefix), "bs:%02x", k);
+                add_text_max(w, prefix, (const uint8_t*)shape, strlen(shape), CAPE_HWSLOT_SHAPE_WORDS);
+                free(shape);
+            }
         }
     }
     add(w, "end");

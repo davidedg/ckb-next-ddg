@@ -6,7 +6,7 @@
 #include <string.h>
 
 // The order of the words of a transaction (cape_hwslot.h)
-enum { PH_BEGIN = 0, PH_NAME, PH_LIGHT, PH_MODEL, PH_WL, PH_IND, PH_BIND, PH_MAP, PH_ACT, PH_END };
+enum { PH_BEGIN = 0, PH_NAME, PH_LIGHT, PH_MODEL, PH_WL, PH_IND, PH_BIND, PH_MAP, PH_ACT, PH_SHAPE, PH_END };
 
 // A sanity bound on what one transaction may carry (the limits of an edit are cape_binding_check's, at check:): 64 macro files as
 // large as the daemon reads one, 16 MiB, far above what a slot holds (the flash has 2038 sectors of 4 KiB)
@@ -19,8 +19,10 @@ static void txn_clear(cape_stage_txn* t){
     cape_lightmodel_free(&t->lighting);
     cape_lightmodel_reader_free(t->lighting_reader);
     free(t->act_ev);
+    for(unsigned k = 0; k < CAPE_BIND_K95_KEYS; ++k) free(t->shapes[k]);
     memset(t, 0, sizeof(*t));
     t->act_key = -1;
+    t->shape_key = -1;
     t->im_key = -1;
 }
 
@@ -29,6 +31,7 @@ void cape_stage_init(cape_stage* st){
         return;
     memset(st, 0, sizeof(*st));
     for(unsigned i = 0; i < CAPE_STAGE_SLOTS; i++){
+        st->slot[i].shape_key = -1;
         st->slot[i].act_key = -1;
         st->slot[i].im_key = -1;
     }
@@ -442,6 +445,41 @@ static void w_im(cape_stage_txn* t, const char** f, const size_t* fl, unsigned n
     t->nhold++;
 }
 
+// Complete model metadata follows all executable bindings, sorted by key.
+static void w_shape(cape_stage_txn* t, const char** f, const size_t* fl, unsigned nf){
+    need_no_act(t, "bs");
+    phase(t, PH_SHAPE, "bs");
+    if(t->failed) return;
+    uint32_t key;
+    unsigned part, parts;
+    const char* slash = nf == 5 ? memchr(f[3], '/', fl[3]) : NULL;
+    if(t->bind != CAPE_STAGE_BIND_MODEL || !slash || !key_of(f[2], fl[2], &key)
+       || !dec(f[3], (size_t)(slash - f[3]), CAPE_HWSLOT_SHAPE_WORDS, &part)
+       || !dec(slash + 1, fl[3] - (size_t)(slash - f[3]) - 1, CAPE_HWSLOT_SHAPE_WORDS, &parts)
+       || !parts || !part || part > parts || fl[4] > CAPE_HWSLOT_TEXT_MAX || !fl[4]){
+        fail(t, "a malformed bs word"); return;
+    }
+    if((int)key != t->shape_key){
+        if((int)key <= t->shape_key || t->shape_part != t->shape_parts || part != 1){
+            fail(t, "model metadata out of order"); return;
+        }
+        t->shape_key = (int)key; t->shape_part = 0; t->shape_parts = parts;
+    }
+    if(part != t->shape_part + 1 || parts != t->shape_parts || t->model.key[key].kind == CAPE_BIND_NATIVE){
+        fail(t, "model metadata without the expected action"); return;
+    }
+    uint8_t decoded[CAPE_HWSLOT_TEXT_MAX];
+    const int n = cape_hwslot_decode(f[4], fl[4], decoded, sizeof(decoded));
+    if(n <= 0 || memchr(decoded, 0, (size_t)n) || t->shape_bytes + (size_t)n > STAGE_BYTES_MAX){
+        fail(t, "invalid model metadata"); return;
+    }
+    const size_t old = t->shapes[key] ? strlen(t->shapes[key]) : 0;
+    char* p = realloc(t->shapes[key], old + (size_t)n + 1);
+    if(!p){ fail(t, "out of memory"); return; }
+    memcpy(p + old, decoded, (size_t)n); p[old + (size_t)n] = 0;
+    t->shapes[key] = p; t->shape_part = part; t->shape_bytes += (size_t)n;
+}
+
 static void w_end(cape_stage_txn* t, const char** f, const size_t* fl, unsigned nf){
     unsigned n;
     need_no_act(t, "end");
@@ -450,6 +488,7 @@ static void w_end(cape_stage_txn* t, const char** f, const size_t* fl, unsigned 
         fail(t, "a malformed end word");
         return;
     }
+    if(t->shape_part != t->shape_parts) fail(t, "incomplete model metadata");
     if(t->name_next != t->name_total)
         fail(t, "the name is not all there");
     if(t->light == CAPE_STAGE_LIGHT_UNSET)
@@ -564,6 +603,8 @@ cape_stage_request cape_stage_word(cape_stage* st, int owner, const char* word, 
         w_act(t, f, fl, nf);
     else if(is(f[0], fl[0], "ev"))
         w_ev(t, f, fl, nf);
+    else if(is(f[0], fl[0], "bs"))
+        w_shape(t, f, fl, fields(word, len, f, fl, 5));
     else if(is(f[0], fl[0], "im"))
         w_im(t, f, fl, nf);
     else

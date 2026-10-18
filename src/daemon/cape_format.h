@@ -159,7 +159,8 @@ int cape_map_build(const cape_map_entry* in, size_t n, uint8_t* out, size_t cap)
 #define CAPE_WINLOCK_ALT_TAB    0x02
 #define CAPE_WINLOCK_ALT_F4     0x04
 #define CAPE_WINLOCK_SHIFT_TAB  0x08
-#define CAPE_WINLOCK_KNOWN      0x0f  // the bits iCUE has options for
+#define CAPE_WINLOCK_ENCRYPTION 0x10  // iCUE's 'disable encryption' option, which it writes for this keyboard too
+#define CAPE_WINLOCK_KNOWN      0x1f  // the bits iCUE has options for
 #define CAPE_WINLOCK_DEFAULT    CAPE_WINLOCK_WINKEY
 #define CAPE_DAT_HEADER       4
 #define CAPE_DAT_ENTRY_SIZE   16

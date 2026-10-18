@@ -55,6 +55,7 @@ QCheckBox* HwPerfWidget::option(uint8_t bit) const {
 
 void HwPerfWidget::setPerf(const HwSlotDraft::Perf& perf){
     filling = true;
+    keptWinlock = perf.winlock & 0x10;
     for(int n = 0; n < 4; ++n){
         colours[n]->color(colourAt(perf.indicators, n));
         options[n]->setChecked(perf.winlock & OPTION_BITS[n]);
@@ -64,7 +65,7 @@ void HwPerfWidget::setPerf(const HwSlotDraft::Perf& perf){
 
 HwSlotDraft::Perf HwPerfWidget::perf() const {
     HwSlotDraft::Perf p;
-    p.winlock = 0;   // (the bits iCUE never writes, 4 to 7, are not saved: none)
+    p.winlock = keptWinlock;   // bit 4, iCUE's encryption option, is kept as the slot had it; iCUE writes none of 5 to 7
     for(int n = 0; n < 4; ++n)
         if(options[n]->isChecked())
             p.winlock |= OPTION_BITS[n];

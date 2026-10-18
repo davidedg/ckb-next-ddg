@@ -133,7 +133,11 @@ std::vector<Stroke> canonicalUsStrokes(const std::u32string& text, std::u32strin
     for(size_t i = 0; i < text.size(); ++i){
         if(text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;   // "\r\n" is one Enter
         Stroke s;
-        if(canonicalUsStroke(text[i], s)) out.push_back(s);
+        // iCUE types its Text as Latin-1: each UTF-16 unit beyond U+00FF is a '?'
+        if(text[i] > 0xff){
+            canonicalUsStroke('?', s);
+            out.insert(out.end(), text[i] > 0xffff ? 2 : 1, s);
+        } else if(canonicalUsStroke(text[i], s)) out.push_back(s);
         else if(dropped) dropped->push_back(text[i]);
     }
     return out;

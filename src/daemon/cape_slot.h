@@ -129,6 +129,7 @@ typedef struct {
     uint8_t ind[CAPE_IND_COUNT * 3];
     // A slot read from its PROFILE.ZIP (from_zip) is saved with one: the model to write is the files to write imported with the model
     // of the slot as the base (cape_compile_import)
+    const char* const* shapes;   // per-key XML grouping and remap identities from the editor
     const cape_compile_hold* hold;   // intervals of 'Imitate holding key' longer than their files can say (hwslot im:)
     size_t nhold;
     const uint8_t* seed;             // CAPE_SLOT_SEED_SIZE random bytes the identities of the new actions and layers of the model are

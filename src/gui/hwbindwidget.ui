@@ -669,10 +669,15 @@
            </widget>
           </item>
           <item row="0" column="3" alignment="Qt::AlignLeft">
-           <widget class="QPushButton" name="releaseButton">
-            <property name="text">
-             <string>Release</string>
-            </property>
+           <widget class="QWidget" name="keyEventButtons" native="true">
+            <layout class="QHBoxLayout" name="keyEventButtonsLayout">
+             <property name="leftMargin"><number>0</number></property>
+             <property name="topMargin"><number>0</number></property>
+             <property name="rightMargin"><number>0</number></property>
+             <property name="bottomMargin"><number>0</number></property>
+             <item><widget class="QPushButton" name="releaseButton"><property name="text"><string>Release</string></property></widget></item>
+             <item><widget class="QPushButton" name="keystrokeButton"><property name="text"><string>Keystroke</string></property></widget></item>
+            </layout>
            </widget>
           </item>
           <item row="1" column="0">

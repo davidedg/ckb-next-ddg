@@ -53,6 +53,10 @@ typedef struct {
     cape_binding_model model;         // bind:model: the bindings (its Win Lock options are the default and do not count: wl: says)
     cape_compile_hold hold[CAPE_BIND_K95_KEYS];   // im: the intervals of 'Imitate holding key' longer than their files can say
     size_t nhold;
+    char* shapes[CAPE_BIND_K95_KEYS]; // complete per-key model metadata, in ascending key order
+    int shape_key;
+    unsigned shape_part, shape_parts;
+    size_t shape_bytes;
     // what the first check: drew for the transaction, kept for its save: and a Retry (the daemon's: here they are only kept)
     int drawn;
     uint8_t seed[CAPE_SLOT_SEED_SIZE];   // the identities of the new actions and layers

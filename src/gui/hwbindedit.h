@@ -57,16 +57,20 @@ bool isCanonicalShortcut(const std::vector<uint8_t>& keys);
 
 // One row of the event table of a Macro, one event each (also every delay of 0: iCUE's editor shows them)
 struct Row {
-    enum Type { PRESS, RELEASE, DELAY, RANDOM } type;
+    enum Type { PRESS, RELEASE, DELAY, RANDOM, STROKE } type;
     unsigned value;                         // a key index, or ms (the lower bound of a random delay)
     unsigned max;                           // RANDOM: the upper bound
+    std::vector<uint8_t> keys;               // multi-key XML event; empty for the single key in value
     Row() : type(PRESS), value(0), max(0) {}
     Row(Type t, unsigned v, unsigned m = 0) : type(t), value(v), max(m) {}
-    bool operator==(const Row& o) const { return type == o.type && value == o.value && (type != RANDOM || max == o.max); }
+    bool operator==(const Row& o) const { return type == o.type && value == o.value && keys == o.keys && (type != RANDOM || max == o.max); }
 };
-// One row per event; false for an event that is none of the four (a delay of 2 bytes iCUE never writes, a0..bf, or an unknown one).
+// Raw-file rows (Press, Release or delay); false for an event that is none of those (a delay of 2 bytes iCUE never writes, a0..bf, or an unknown one).
 // A delay of 4 bytes is a DELAY row of its value (events() refuses it in a Macro above 4095 ms, with the reason)
 bool rows(const std::vector<HwBinding::Event>& ev, std::vector<Row>& out);
+// Restore XML row grouping, including Keystroke, when the slot supplies it. Every row must agree with the raw events.
+bool modelRows(const HwBinding::Action& action, std::vector<Row>& out);
+std::string rowShape(const std::vector<Row>& rows);
 // The events of the rows as iCUE's writer makes them: a delay of 0 between two key rows next to each other (so after Apply such a
 // delay is a row of the table). False with why if they are not a Macro iCUE writes: a key that is not one, a delay above
 // MACRO_DELAY_MAX, a random delay from more than to, more than MACRO_ROWS_MAX events once the delays of 0 are in, a key pressed

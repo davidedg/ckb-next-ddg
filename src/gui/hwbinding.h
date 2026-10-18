@@ -21,6 +21,7 @@ constexpr unsigned EVENT_BYTES = 128;   // bytes of the events of one e:/ev: wor
 constexpr unsigned NAME_WORDS = 8;
 constexpr unsigned NAME_UNITS = 114;    // UTF-16 units of a profile name the GUI writes (PROFILE.I keeps a terminator)
 constexpr unsigned READ_NAME_UNITS = 115;   // and of one it reads: iCUE fills the whole area of a long name
+constexpr unsigned SHAPE_WORDS = 512;
 constexpr unsigned TX_WORDS = 48;       // tx: words of one string at most
 // 'Imitate holding key' on press: the longest interval a file can say (the delay c0 ff ff ff), and iCUE's longest (99 999 s)
 constexpr unsigned long IMITATE_FILE_MAX = 16777215, IMITATE_MAX = 99999000;
@@ -65,8 +66,9 @@ struct Action {
     unsigned long imitateMs = 0;
     // A Text (subtype 03): its string as iCUE keeps it (tx:, UTF-8, with its line ends and the characters its table leaves out
     // of the events); shown, not compared: a save keeps the slot's string for the same events
+    std::string shape;                  // XML event grouping or remap identity, checked against the executable events
     std::string text;
-    // The same for the keyboard and for the slot's PROFILE.ZIP: kind, destination, subtype, start, run, repeat, every event, and
+    // The same executable action and XML grouping/remap identity: kind, destination, subtype, start, run, repeat, every event, and
     // the interval of an Imitate longer than its file can say
     bool sameAs(const Action& o) const;
     // Its events are a press, the delay c0 ff ff ff and a release: an Imitate on press at least as long as a file can say

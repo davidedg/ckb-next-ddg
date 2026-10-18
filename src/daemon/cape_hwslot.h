@@ -9,13 +9,13 @@
  * Record: id:<slot-id> st:empty|ok|none [ro:<encoded-reason>] [zip:<state>] [nm:<part>/<parts>:<text>]
  * [wl:<hh>] [ind:<24-hex>] <complete-lighting-body> <binding-words> end.
  * Empty: id:0 st:empty lights:known:0:0 end. Readonly slots have lights:unknown and no bindings.
- * Complete lighting grammar and typed parameters: cape_lightmodel.h. Binding grammar remains m:, a:, e:, im:, tx:.
+ * Complete lighting grammar and typed parameters: cape_lightmodel.h. Binding grammar: m:, a:, e:, im:, tx:, followed by bs:<key>:<part>/<parts>:<encoded-shape>.
  * Names/text use canonical percent-encoded UTF-8, with whole characters in fragments of at most 300 encoded bytes.
  * Bindings retain their existing byte/event limits and text/imitate metadata; lighting never uses an RGB picture.
  *
  * @N hwslot begin:<txn>:<m>:<base-id> [name:<txn>:<part>/<parts>:<text>]
  * light:<txn>:keep OR light:<txn>:model followed by the complete known lighting body (txn after every tag),
- * [wl:<txn>:<hh>] [ind:<txn>:<24-hex>] bind:<txn>:keep|model [map:/act:/ev:/im: binding body]
+ * [wl:<txn>:<hh>] [ind:<txn>:<24-hex>] bind:<txn>:keep|model [map:/act:/ev:/im: binding body] [bs:<txn>:<key>:<part>/<parts>:<encoded-shape>]
  * end:<txn>:<count>. count includes begin and every word before end. txn is eight nonzero lowercase hex digits.
  * One transaction per slot and notification owner. Any malformed, missing, duplicate or out-of-order field fails it.
  * Commands: check:<txn>:<m>, save:<txn>:<m>, abort:<txn>:<m>, read:<m>, erase:<m>:<base-id>.
@@ -41,6 +41,7 @@
 #define CAPE_HWSLOT_TEXT_MAX     300   // encoded bytes of the text of one nm:/name: word (and of a reason)
 #define CAPE_HWSLOT_EVENT_BYTES  128   // bytes of the events of one e:/ev: word (up to 256 hex digits; 64 events of 2 bytes)
 #define CAPE_HWSLOT_NAME_WORDS   8     // nm:/name: words of one name at most
+#define CAPE_HWSLOT_SHAPE_WORDS 512    // fragments of per-action XML grouping metadata
 #define CAPE_HWSLOT_TX_WORDS     48    // tx: words of one string at most (1024 characters of 4 bytes, encoded: 41)
 #define CAPE_HWSLOT_ID_MAX       52    // "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}:ffffffff" and a terminator
 

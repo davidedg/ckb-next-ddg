@@ -6,6 +6,9 @@
 #include "k95pkeytable.h"
 #include "hwpickermap.h"
 #include "hwtextshape.h"
+extern "C" {
+#include "../daemon/cape_names.h"
+}
 #ifdef USE_XKBCOMMON
 #include "hwtextxkb.h"
 #endif
@@ -123,7 +126,7 @@ private:
 // The modifiers of a Shortcut: the four buttons of the Shortcut tab, never picked on its keyboard
 static const char* const MODIFIER_KEYS[] = {"lwin", "rwin", "lctrl", "rctrl", "lalt", "ralt", "lshift", "rshift"};
 // The Language keys iCUE writes on a real key, in the order of its list (hwbindwidget.ui)
-static const char* const LANGUAGE_KEYS[] = {"hangul", "hanja", "ro", "katahira", "yen", "henkan", "muhenkan", "hash", "bslash_iso"};
+static const char* const LANGUAGE_KEYS[] = {"hangul", "hanja", "ro", "katahira", "yen", "henkan", "muhenkan", "hash", "bslash_iso", "esc", "esc", "esc", "esc", "esc", "esc", "esc", "esc", "esc", "esc", "esc", "esc"};
 
 // A line of the editor that takes room only when it has something to say (no empty band above the bottom row)
 static void showMessage(QLabel* label, const QString& text){
@@ -202,9 +205,16 @@ HwBindWidget::HwBindWidget(QWidget* parent) : QWidget(parent), keyWidget(new Key
     const QList<QAbstractButton*> mouse = {ui->mouse1Radio, ui->mouse2Radio, ui->mouse3Radio, ui->mouse4Radio, ui->mouse5Radio};
     for(int m = 0; m < mouse.size(); ++m)
         ui->mouseGroup->setId(mouse[m], int(K95PKeyTable::MOUSE_FIRST) + m);
+    const QStringList extraLanguages = {"Lang3 (Katakana)", "Lang4 (Hiragana)", "Lang5 (Zenkaku/Hankaku)", "Lang6", "Lang7", "Lang8", "Lang9",
+                                        "International6 (PC9800 Keypad)", "International7", "International8", "International9", "Keypad comma (Brazilian Keypad)"};
+    for(const QString& label : extraLanguages) ui->languageBox->addItem(label + tr(" (hardware: Esc)"));
     for(int i = 0; i < ui->languageBox->count(); ++i){
         languageNames << ui->languageBox->itemText(i);
         ui->languageBox->setItemData(i, K95PKeyTable::indexOf(LANGUAGE_KEYS[i]));
+        static const char* const xmlNames[] = {"Lang1", "Lang2", "International1", "International2", "International3", "International4", "International5",
+            "NonUsTilde", "NonUsBackslash", "Lang3", "Lang4", "Lang5", "Lang6", "Lang7", "Lang8", "Lang9",
+            "International6", "International7", "International8", "International9", "KeypadComma"};
+        ui->languageBox->setItemData(i, QString::fromLatin1(xmlNames[i]), Qt::UserRole + 1);
     }
     resetRemap();
 
@@ -238,6 +248,10 @@ HwBindWidget::HwBindWidget(QWidget* parent) : QWidget(parent), keyWidget(new Key
     upAction = macroMenu->addAction(tr("Move up"), this, [this](){ moveMacroRows(-1); });
     downAction = macroMenu->addAction(tr("Move down"), this, [this](){ moveMacroRows(1); });
     macroMenu->addSeparator();
+    pressTypeAction = macroMenu->addAction(tr("Set type: Press"), this, [this](){ setMacroRowType(Row::PRESS); });
+    releaseTypeAction = macroMenu->addAction(tr("Set type: Release"), this, [this](){ setMacroRowType(Row::RELEASE); });
+    strokeTypeAction = macroMenu->addAction(tr("Set type: Keystroke"), this, [this](){ setMacroRowType(Row::STROKE); });
+    macroMenu->addSeparator();
     removeAction = macroMenu->addAction(tr("Remove"), this, &HwBindWidget::removeMacroRows);
     copyAction->setShortcut(QKeySequence::Copy);
     pasteAction->setShortcut(QKeySequence::Paste);
@@ -256,6 +270,7 @@ HwBindWidget::HwBindWidget(QWidget* parent) : QWidget(parent), keyWidget(new Key
     connect(ui->recordButton, &QPushButton::clicked, this, [this](){ emit recordRequested(!isRecording); });
     connect(ui->pressButton, &QPushButton::clicked, this, &HwBindWidget::addPress);
     connect(ui->releaseButton, &QPushButton::clicked, this, &HwBindWidget::addRelease);
+    connect(ui->keystrokeButton, &QPushButton::clicked, this, &HwBindWidget::addKeystroke);
     connect(ui->delayButton, &QPushButton::clicked, this, &HwBindWidget::addDelay);
     connect(ui->varDelayButton, &QPushButton::clicked, this, &HwBindWidget::addVarDelay);
 
@@ -295,7 +310,7 @@ void HwBindWidget::uniformControls(){
     // are of one size). Then the columns: "Type:", "Key:",
     // "Delay:" and "Max:" in one column; the type selector from the left edge of the key selector to the right edge of Press;
     // "Selected:" from the column of "Run:" to the right edge of Record, on every page
-    const QList<QPushButton*> buttons = {ui->pressButton, ui->releaseButton, ui->delayButton, ui->varDelayButton, ui->recordButton, ui->copyButton,
+    const QList<QPushButton*> buttons = {ui->pressButton, ui->releaseButton, ui->keystrokeButton, ui->delayButton, ui->varDelayButton, ui->recordButton, ui->copyButton,
                                          ui->resetButton, ui->applyButton};
     const QList<QComboBox*> selectors = {ui->keyChooser, ui->runBox};
     QList<QWidget*> all = {ui->typeBox, ui->delaySpin, ui->maxSpin, ui->textDelay, ui->selectedKeys};
@@ -617,6 +632,7 @@ void HwBindWidget::loadPanel(){
     if(draft && draft->hasBindings && index >= 0)
         a = draft->keys[size_t(index)];
     rows.clear();
+    loadedRemapShape = a.kind == Action::REMAP ? a.shape : std::string();
     resetRemap();
     RemapTab tab = KEYBOARD_TAB;
     loadedTextKeys = false;
@@ -628,7 +644,7 @@ void HwBindWidget::loadPanel(){
     Type t = DEFAULT;
     // The event table always holds the events of a macro of any kind: a Text or a Shortcut can be turned into a Macro
     if(a.kind == Action::MACRO){
-        HwBindEdit::rows(a.events, rows);
+        if(!HwBindEdit::modelRows(a, rows)) HwBindEdit::rows(a.events, rows);
         // a combination iCUE does not offer shows no entry (the macro is kept as read: it can be replaced, not edited)
         ui->runBox->setCurrentIndex(ui->runBox->findData(runData(a.start, a.run)));
     }
@@ -649,7 +665,8 @@ void HwBindWidget::loadPanel(){
     case HwBindEdit::REMAP_LANGUAGE:
         t = REMAP;
         tab = LANGUAGE_TAB;
-        ui->languageBox->setCurrentIndex(ui->languageBox->findData(int(a.dst)));
+        ui->languageBox->setCurrentIndex(a.shape.compare(0, 4, "R09:") == 0 ?
+            ui->languageBox->findData(QString::fromStdString(a.shape.substr(4)), Qt::UserRole + 1) : ui->languageBox->findData(int(a.dst)));
         break;
     case HwBindEdit::IMITATE_PRESS:
     case HwBindEdit::IMITATE_TOGGLE: {
@@ -789,9 +806,14 @@ void HwBindWidget::refreshMacroList(){
         const Row& r = rows[size_t(i)];
         const bool isDelay = r.type == Row::DELAY || r.type == Row::RANDOM;
         const QString what = r.type == Row::PRESS ? tr("\u2193  Press") : r.type == Row::RELEASE ? tr("\u2191  Release") :
-                             r.type == Row::RANDOM ? tr("\u23f1  Var. delay") : tr("\u23f1  Delay");
+                             r.type == Row::STROKE ? tr("\u2195  Keystroke") : r.type == Row::RANDOM ? tr("\u23f1  Var. delay") : tr("\u23f1  Delay");
         ui->macroTable->setItem(i, 0, new QTableWidgetItem(what));
-        ui->macroTable->setItem(i, 1, new QTableWidgetItem(isDelay ? QString() : keyName(r.value)));
+        QStringList names;
+        if(!isDelay){
+            if(r.keys.empty()) names << keyName(r.value);
+            else for(uint8_t k : r.keys) names << keyName(k);
+        }
+        ui->macroTable->setItem(i, 1, new QTableWidgetItem(names.join(QStringLiteral(" + "))));
         QTableWidgetItem* ms = new QTableWidgetItem(r.type == Row::DELAY ? tr("%1 ms").arg(r.value) :
                                                     r.type == Row::RANDOM ? tr("%1 - %2 ms").arg(r.value).arg(r.max) : QString());
         ms->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -829,6 +851,10 @@ void HwBindWidget::updateMacroActions(){
     upAction->setEnabled(selected && sel.first > 0);
     downAction->setEnabled(selected && sel.first + sel.second < int(rows.size()));
     removeAction->setEnabled(selected);
+    const bool keyRow = selected && selectedDelays() == 0;
+    for(QAction* a : {pressTypeAction, releaseTypeAction, strokeTypeAction}){
+        a->setVisible(keyRow); a->setEnabled(keyRow);
+    }
     // With delays among the selected rows, Delay sets them all to the value of its box (as iCUE after a recording); otherwise it inserts a new delay. Two delays in a row: insert one elsewhere and move it, or copy and paste
     const bool setting = selectedDelays() > 0;
     ui->delayButton->setText(setting ? tr("Set delays") : tr("Delay"));
@@ -908,6 +934,18 @@ void HwBindWidget::addPress(){
 
 void HwBindWidget::addRelease(){
     addRow(Row(Row::RELEASE, ui->keyChooser->currentData().toUInt()));
+}
+
+void HwBindWidget::addKeystroke(){
+    addRow(Row(Row::STROKE, ui->keyChooser->currentData().toUInt()));
+}
+
+void HwBindWidget::setMacroRowType(Row::Type type){
+    const auto sel = macroSelection();
+    if(!editable || !controls || isRecording || sel.first < 0 || selectedDelays() ||
+       (type != Row::PRESS && type != Row::RELEASE && type != Row::STROKE)) return;
+    for(int i = sel.first; i < sel.first + sel.second; ++i) rows[size_t(i)].type = type;
+    refreshMacroList(); selectMacroRows(sel.first, sel.second);
 }
 
 void HwBindWidget::addDelay(){
@@ -1353,8 +1391,13 @@ bool HwBindWidget::build(Action& out){
         case KEYBOARD_TAB: {
             if(keyboardPick < 0){ fail(tr("Choose the key to remap to.")); return false; }
             const uint8_t key = uint8_t(keyboardPick);
-            if(!ui->imitateCheck->isChecked())
+            if(!ui->imitateCheck->isChecked()){
                 out = HwBindEdit::remap(key);
+                if(!K95PKeyTable::mediaKey(key)){
+                    const char* name = cape_profile_key_name(key);
+                    if(name) out.shape = std::string("R00:") + name;
+                }
+            }
             else if(ui->imitateMode->currentIndex() == 1)
                 out = HwBindEdit::imitateToggle(key);
             else   // tenths of a second, as the field shows them
@@ -1364,6 +1407,7 @@ bool HwBindWidget::build(Action& out){
         case MOUSE_TAB:
             if(ui->mouseGroup->checkedId() < 0){ fail(tr("Choose the mouse button to remap to.")); return false; }
             out = HwBindEdit::remap(uint8_t(ui->mouseGroup->checkedId()));
+            out.shape = std::string("R06:") + cape_profile_key_name(out.dst);
             return true;
         case SHORTCUT_TAB: {
             const std::vector<uint8_t> keys = shortcutKeys();
@@ -1374,6 +1418,8 @@ bool HwBindWidget::build(Action& out){
         case LANGUAGE_TAB:
             if(ui->languageBox->currentIndex() < 0){ fail(tr("Choose the Language key to remap to.")); return false; }
             out = HwBindEdit::remap(uint8_t(ui->languageBox->currentData().toInt()));
+            out.shape = "R09:" + ui->languageBox->currentData(Qt::UserRole + 1).toString().toStdString();
+            if(loadedRemapShape.size() > 4 && loadedRemapShape.substr(4) == out.shape.substr(4)) out.shape = loadedRemapShape;
             return true;
         }
         return false;
@@ -1383,6 +1429,7 @@ bool HwBindWidget::build(Action& out){
         if(ui->runBox->currentIndex() < 0){ fail(tr("Choose when the macro runs.")); return false; }
         const unsigned when = ui->runBox->currentData().toUInt();
         out = HwBindEdit::macro(ev, uint8_t(when >> 8), uint8_t(when & 0xff));
+        out.shape = HwBindEdit::rowShape(rows);
         return true;
     }
     case TEXT: {

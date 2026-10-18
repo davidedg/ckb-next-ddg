@@ -66,6 +66,7 @@ public:
     void removeMacroRows();
     void moveMacroRows(int by);
     void dropMacroRows(int to);
+    void setMacroRowType(HwBindEdit::Row::Type type);
     QMenu* macroContextMenu() const { return macroMenu; }
     void setShortcut(const QStringList& keys);
     void setText(const QString& text, unsigned delayMs);
@@ -103,6 +104,7 @@ private slots:
     void typeChanged(int index);
     void addPress();
     void addRelease();
+    void addKeystroke();
     void addDelay();
     void addVarDelay();
     void picked(const QStringList& keys);
@@ -128,6 +130,7 @@ private:
     std::vector<HwBindEdit::Row> rows;
     int keyboardPick = -1, shortcutPick = -1;    // the key of each picker (a key index), -1 for none
     bool pickerFilling = false;                  // the picker's selection is set by the program, not clicked
+    std::string loadedRemapShape;             // keep the original remap tab for an unchanged destination
     QStringList languageNames;                   // the entries of the Language keys as in hwbindwidget.ui
     std::unique_ptr<HwTextXkb> xkb;
     QString xkbLayout, layoutName;           // the layout of ckb-next, and its name as the Settings show it
@@ -148,6 +151,7 @@ private:
     enum { KEYS_MIN = 60 };                  // the smallest height of the keyboard
     QMenu* macroMenu;
     QAction *copyAction, *pasteAction, *upAction, *downAction, *removeAction;
+    QAction *pressTypeAction, *releaseTypeAction, *strokeTypeAction;
     std::vector<HwBindEdit::Row> macroClipboard;           // Copy of the context menu: inside the editor, not the system's
 
     int indexOf(const QString& key) const;

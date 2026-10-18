@@ -3,6 +3,7 @@
 #include "k95pkeytable.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <sstream>
 
@@ -108,6 +109,7 @@ Action imitateToggle(uint8_t key){
 Kind kindOf(const Action& a){
     if(a.kind == Action::NATIVE) return NATIVE;
     if(a.kind == Action::REMAP){
+        if(a.shape.compare(0, 4, "R09:") == 0) return REMAP_LANGUAGE;
         if(a.dst >= K95PKeyTable::MOUSE_FIRST && a.dst <= K95PKeyTable::MOUSE_LAST) return REMAP_MOUSE;
         if(K95PKeyTable::keyboardKey(a.dst) || K95PKeyTable::mediaKey(a.dst)) return REMAP_KEYBOARD;
         if(K95PKeyTable::languageKey(a.dst)) return REMAP_LANGUAGE;
@@ -236,6 +238,60 @@ bool rows(const std::vector<Event>& ev, std::vector<Row>& out){
     return true;
 }
 
+std::string rowShape(const std::vector<Row>& rowsIn){
+    std::string shape = "M";
+    for(const Row& r : rowsIn){
+        if(r.type == Row::DELAY || r.type == Row::RANDOM) shape += 'd';
+        else {
+            char word[6];
+            std::snprintf(word, sizeof(word), "%c%04x", r.type == Row::PRESS ? 'p' : r.type == Row::RELEASE ? 'r' : 's',
+                          unsigned(r.keys.empty() ? 1 : r.keys.size()));
+            shape += word;
+        }
+    }
+    return shape;
+}
+
+bool modelRows(const Action& a, std::vector<Row>& out){
+    if(a.shape.empty() || a.shape[0] != 'M') return rows(a.events, out);
+    out.clear();
+    size_t pos = 0;
+    bool lastKey = false;
+    for(size_t at = 1; at < a.shape.size();){
+        const char kind = a.shape[at++];
+        Row r;
+        if(kind == 'd'){
+            if(pos >= a.events.size()) return false;
+            std::vector<Row> delayRow;
+            if(!rows({a.events[pos++]}, delayRow) || (delayRow[0].type != Row::DELAY && delayRow[0].type != Row::RANDOM)) return false;
+            out.push_back(delayRow[0]); lastKey = false;
+            continue;
+        }
+        if((kind != 'p' && kind != 'r' && kind != 's') || at + 4 > a.shape.size()) return false;
+        const std::string count = a.shape.substr(at, 4);
+        if(count.find_first_not_of("0123456789abcdef") != std::string::npos) return false;
+        const unsigned n = unsigned(std::stoul(count, nullptr, 16)); at += 4;
+        if(!n || n > a.events.size()) return false;
+        r.type = kind == 'p' ? Row::PRESS : kind == 'r' ? Row::RELEASE : Row::STROKE;
+        std::vector<uint8_t> keys;
+        for(unsigned j = 0; j < n * (kind == 's' ? 2u : 1u); ++j){
+            if(lastKey){
+                if(pos >= a.events.size() || a.events[pos++] != delay(0)) return false;
+            }
+            if(pos >= a.events.size()) return false;
+            const Event e = a.events[pos++];
+            const auto expected = kind == 'r' || (kind == 's' && j >= n) ? HwBinding::EV_RELEASE : HwBinding::EV_PRESS;
+            if(HwBinding::eventKind(e) != expected || e.b1 >= HwBinding::KEYS) return false;
+            if(j < n) keys.push_back(e.b1);
+            else if(keys[j - n] != e.b1) return false;
+            lastKey = true;
+        }
+        r.value = keys[0]; if(n > 1) r.keys = keys;
+        out.push_back(r);
+    }
+    return pos == a.events.size();
+}
+
 size_t moveRows(std::vector<Row>& rowsIn, size_t first, size_t count, size_t to){
     const size_t size = rowsIn.size();
     if(count == 0 || first >= size || count > size - first || to > size || (to >= first && to <= first + count))
@@ -279,20 +335,19 @@ bool events(const std::vector<Row>& rowsIn, std::vector<Event>& out, std::string
             lastKey = false;
             continue;
         }
-        if(r.value >= HwBinding::KEYS || K95PKeyTable::label(r.value).empty()){ why = at + "not a key"; return false; }
-        const std::string name = K95PKeyTable::label(r.value);
-        // iCUE's writer puts a delay of 0 between two key events
-        if(lastKey) ev.push_back(delay(0));
-        if(r.type == Row::PRESS){
-            if(down[r.value]){ why = at + name + " is pressed again before it is released"; return false; }
-            down[r.value] = true;
-            ev.push_back(press(uint8_t(r.value)));
-        } else {
-            if(!down[r.value]){ why = at + name + " is released but not pressed"; return false; }
-            down[r.value] = false;
-            ev.push_back(release(uint8_t(r.value)));
+        const std::vector<uint8_t> keys = r.keys.empty() ? std::vector<uint8_t>{uint8_t(r.value)} : r.keys;
+        if(r.value >= HwBinding::KEYS){ why = at + "not a key"; return false; }
+        for(unsigned j = 0; j < keys.size() * (r.type == Row::STROKE ? 2u : 1u); ++j){
+            const uint8_t key = keys[j % keys.size()];
+            if(key >= HwBinding::KEYS || K95PKeyTable::label(key).empty()){ why = at + "not a key"; return false; }
+            const bool pressKey = r.type == Row::PRESS || (r.type == Row::STROKE && j < keys.size());
+            const std::string name = K95PKeyTable::label(key);
+            if(pressKey == down[key]){ why = at + name + (pressKey ? " is pressed again before it is released" : " is released but not pressed"); return false; }
+            if(lastKey) ev.push_back(delay(0));
+            down[key] = pressKey;
+            ev.push_back(pressKey ? press(key) : release(key));
+            lastKey = true;
         }
-        lastKey = true;
     }
     for(unsigned k = 0; k < HwBinding::KEYS; ++k)
         if(down[k]){ why = K95PKeyTable::label(k) + " is pressed and never released"; return false; }

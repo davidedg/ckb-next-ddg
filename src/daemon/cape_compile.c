@@ -170,22 +170,13 @@ static long utf8_next(const uint8_t* s, size_t len, size_t* i){
     return (long)cp;
 }
 
-// iCUE's limits of a Text: 1024 characters as its field counts them (UTF-16 units), 99999 ms between them
-#define TEXT_CHARS_MAX  1024
-
+// iCUE types a Text as Latin-1: a UTF-16 unit beyond U+00FF is a '?', a character of no key of its table is left out
 static int text_events(const cape_profile_action* a, events* v, char* why){
     const uint8_t* s = (const uint8_t*)str(&a->text);
     const size_t len = a->text.len;
-    size_t units = 0;
-    for(size_t i = 0; i < len;){
-        const long cp = utf8_next(s, len, &i);
-        if(cp < 0)
+    for(size_t i = 0; i < len;)
+        if(utf8_next(s, len, &i) < 0)
             return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a Text that is not UTF-8");
-        units += cp >= 0x10000 ? 2 : 1;
-    }
-    if(units > TEXT_CHARS_MAX || a->char_delay > CAPE_BIND_TEXT_DELAY_MAX)
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a Text of %zu characters, %u ms between them: iCUE's limits are %d and %d", units,
-                    (unsigned)a->char_delay, TEXT_CHARS_MAX, CAPE_BIND_TEXT_DELAY_MAX);
     // Each character: up to four key events, three delays of 0 between them and the delay before it
     int rc = events_init(v, 8 * len);
     if(rc != CAPE_OK)
@@ -194,104 +185,78 @@ static int text_events(const cape_profile_action* a, events* v, char* why){
     unsigned typed = 0;
     for(size_t i = 0; i < len;){
         const long cp = utf8_next(s, len, &i);
-        char letter[2];
-        const char* named;
-        int shift;
-        if(!text_key((uint32_t)cp, letter, &named, &shift))
-            continue;
-        const int k = cape_profile_key(named, strlen(named));
-        if(k == CAPE_PROFILE_NONE)
-            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "no key called \"%s\"", named);
-        if(typed++)
-            push(v, delay_event(a->char_delay));
-        if(shift)
-            push(v, cape_ev_press(lshift));
-        push(v, cape_ev_press((uint8_t)k));
-        push(v, cape_ev_release((uint8_t)k));
-        if(shift)
-            push(v, cape_ev_release(lshift));
+        const unsigned units = cp >= 0x10000 ? 2 : 1;
+        for(unsigned u = 0; u < units; u++){
+            char letter[2];
+            const char* named;
+            int shift;
+            if(!text_key(cp > 0xff ? '?' : (uint32_t)cp, letter, &named, &shift))
+                continue;
+            const int k = cape_profile_key(named, strlen(named));
+            if(k == CAPE_PROFILE_NONE)
+                return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "no key called \"%s\"", named);
+            if(typed++)
+                push(v, delay_event(a->char_delay));
+            if(shift)
+                push(v, cape_ev_press(lshift));
+            push(v, cape_ev_press((uint8_t)k));
+            push(v, cape_ev_release((uint8_t)k));
+            if(shift)
+                push(v, cape_ev_release(lshift));
+        }
     }
     return CAPE_OK;
 }
 
-// The order of the keys of a shortcut: Win, Ctrl, Alt, Shift, then the others
-static int modifier_rank(const cape_profile_text* t){
-    static const char* const order[] = { "LeftGui", "LeftCtrl", "LeftAlt", "LeftShift" };
-    for(int i = 0; i < 4; i++)
-        if(t->len == strlen(order[i]) && !memcmp(str(t), order[i], t->len))
-            return i;
-    return 4;
-}
-
+// The keys of a shortcut pressed in the order of the list, then released the other way
 static int shortcut_events(const cape_profile_action* a, events* v, char* why){
     if(a->nstroke > CAPE_BIND_EDIT_EVENTS_MAX)
         return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a shortcut of %u keys", (unsigned)a->nstroke);
     uint8_t* keys = malloc(a->nstroke ? a->nstroke : 1);
-    int* rank = malloc((a->nstroke ? a->nstroke : 1) * sizeof(*rank));
-    int rc = keys && rank ? events_init(v, 4 * (size_t)a->nstroke) : CAPE_E_CAP;
-    for(uint32_t i = 0; rc == CAPE_OK && i < a->nstroke; i++){
+    int rc = keys ? events_init(v, 4 * (size_t)a->nstroke) : CAPE_E_CAP;
+    for(uint32_t i = 0; rc == CAPE_OK && i < a->nstroke; i++)
         rc = event_key(&a->stroke[i], &keys[i], why);
-        rank[i] = modifier_rank(&a->stroke[i]);
-    }
     if(rc == CAPE_OK){
-        // A stable sort by rank
-        for(uint32_t i = 1; i < a->nstroke; i++){
-            const uint8_t k = keys[i];
-            const int r = rank[i];
-            uint32_t j = i;
-            for(; j > 0 && rank[j - 1] > r; j--){
-                keys[j] = keys[j - 1];
-                rank[j] = rank[j - 1];
-            }
-            keys[j] = k;
-            rank[j] = r;
-        }
         for(uint32_t i = 0; i < a->nstroke; i++)
             push(v, cape_ev_press(keys[i]));
         for(uint32_t i = a->nstroke; i > 0; i--)
             push(v, cape_ev_release(keys[i - 1]));
     }
     free(keys);
-    free(rank);
     return rc;
 }
 
+// The events of a Macro as iCUE writes them. Its termination method and priority have no place in the files. A key event
+// is one of each of its keys (a stroke: all the presses, then all the releases), with a delay of 0 between two key events; a
+// constant delay is in 2 bytes below 8192 ms and in 4 from there, at most CAPE_DELAY_MAX; a random one has each bound cut to
+// CAPE_RANDOM_MAX, in the order it has
 static int macro_events(const cape_profile_action* a, events* v, char* why){
-    if(a->termination != CAPE_PROFILE_TERMINATE_INTERRUPT || a->high_priority)
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a Macro that is not interrupted, or of high priority");
-    if(a->nevents > CAPE_BIND_MACRO_ROWS_MAX)
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a Macro of %u events: iCUE records at most %d", (unsigned)a->nevents,
-                    CAPE_BIND_MACRO_ROWS_MAX);
-    // A key stroke is a press and a release, with a delay of 0 before each
-    int rc = events_init(v, 4 * (size_t)a->nevents);
+    size_t room = 0;
+    for(uint32_t i = 0; i < a->nevents; i++)
+        room += a->events[i].kind == CAPE_PROFILE_DELAY_EVENT ? 1 : 4 * (size_t)a->events[i].nkeys;
+    if(room > 4 * (size_t)CAPE_BIND_EDIT_EVENTS_MAX)
+        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a macro file of more than %d events", CAPE_BIND_EDIT_EVENTS_MAX);
+    int rc = events_init(v, room ? room : 1);
     for(uint32_t i = 0; rc == CAPE_OK && i < a->nevents; i++){
         const cape_profile_event* e = &a->events[i];
         if(e->kind == CAPE_PROFILE_DELAY_EVENT){
             cape_event d = { 0, 0, 0, 0 };
             if(e->random){
-                if(e->delay_min > e->delay_max || e->delay_max > CAPE_BIND_MACRO_DELAY_MAX)
-                    return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a random delay from %u to %u ms", (unsigned)e->delay_min,
-                                (unsigned)e->delay_max);
-                cape_ev_random(e->delay_min, e->delay_max, &d);
-            } else {
-                if(e->delay > CAPE_BIND_MACRO_DELAY_MAX)
-                    return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a delay of %u ms in a Macro: iCUE records at most %d",
-                                (unsigned)e->delay, CAPE_BIND_MACRO_DELAY_MAX);
-                cape_ev_delay(e->delay, &d);
-            }
+                const unsigned lo = e->delay_min > CAPE_RANDOM_MAX ? CAPE_RANDOM_MAX : e->delay_min;
+                const unsigned hi = e->delay_max > CAPE_RANDOM_MAX ? CAPE_RANDOM_MAX : e->delay_max;
+                d = (cape_event){ 0xe0, (uint8_t)(lo >> 4), (uint8_t)(((lo & 0x0f) << 4) | (hi >> 8)), (uint8_t)hi };
+            } else
+                cape_ev_delay(e->delay > CAPE_DELAY_MAX ? CAPE_DELAY_MAX : e->delay, &d);
             push(v, d);
             continue;
         }
-        if(e->nkeys != 1)
-            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a key event of a Macro with %u keys", (unsigned)e->nkeys);
         uint8_t k;
-        rc = event_key(&e->keys[0], &k, why);
-        if(rc != CAPE_OK)
-            break;
-        if(e->sub == CAPE_PROFILE_SUB_PRESS || e->sub == CAPE_PROFILE_SUB_STROKE)
-            push(v, cape_ev_press(k));
-        if(e->sub == CAPE_PROFILE_SUB_RELEASE || e->sub == CAPE_PROFILE_SUB_STROKE)
-            push(v, cape_ev_release(k));
+        for(uint32_t j = 0; rc == CAPE_OK && j < e->nkeys && e->sub != CAPE_PROFILE_SUB_RELEASE; j++)
+            if((rc = event_key(&e->keys[j], &k, why)) == CAPE_OK)
+                push(v, cape_ev_press(k));
+        for(uint32_t j = 0; rc == CAPE_OK && j < e->nkeys && e->sub != CAPE_PROFILE_SUB_PRESS; j++)
+            if((rc = event_key(&e->keys[j], &k, why)) == CAPE_OK)
+                push(v, cape_ev_release(k));
     }
     return rc;
 }
@@ -300,29 +265,20 @@ int cape_compile_action(const cape_profile_action* a, cape_binding_action* out, 
     if(!a || !out)
         return CAPE_E_ARG;
     memset(out, 0, sizeof(*out));
-    if(a->sound_path.len || memcmp(a->lighting.b, (const uint8_t[16]){ 0 }, 16))
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "an action with a sound or a lighting");
-    if(a->repeat_mode != CAPE_PROFILE_REPEAT_NO || a->repeat_count != 1 || a->repeat_delay || a->random_delay_from
-       || a->random_delay_to || a->delay_mode != CAPE_PROFILE_DELAY_CONSTANT)
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "an action that repeats");
-    if(a->retain_original || a->terminate_on_second)
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "an action that keeps the key's own output or ends on a second press");
+    // iCUE does not write the sound or the lighting of an action, whether it keeps the key's own output, its second-press
+    // options, or the delays of a repeat: only how a Macro repeats reaches the files
+    if(a->kind == CAPE_PROFILE_MACRO && a->repeat_mode != CAPE_PROFILE_REPEAT_NO)
+        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a Macro that repeats");
+    // Only a Macro takes the trigger of its action: iCUE writes every other kind on press, uninterrupted, once. A long press is
+    // a press to the files
     uint8_t start = 0, run = 1, repeat = 1;
-    switch(a->exec_hint){
-    case CAPE_PROFILE_HINT_ON_BOTH:
-    case CAPE_PROFILE_HINT_ON_PRESS:
-        break;
-    case CAPE_PROFILE_HINT_ON_RELEASE:
-        start = 0x11;
-        break;
-    case CAPE_PROFILE_HINT_WHILE_PRESSED:
-        run = 3;
-        break;
-    case CAPE_PROFILE_HINT_TOGGLE:
-        run = 4;
-        break;
-    default:
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "an action on a long press");
+    if(a->kind == CAPE_PROFILE_MACRO){
+        if(a->exec_hint == CAPE_PROFILE_HINT_ON_RELEASE)
+            start = 0x11;
+        else if(a->exec_hint == CAPE_PROFILE_HINT_WHILE_PRESSED)
+            run = 3;
+        else if(a->exec_hint == CAPE_PROFILE_HINT_TOGGLE)
+            run = 4;
     }
 
     events v = { NULL, 0, 0, 0 };
@@ -331,18 +287,20 @@ int cape_compile_action(const cape_profile_action* a, cape_binding_action* out, 
     switch(a->kind){
     case CAPE_PROFILE_MEDIA: {
         const int k = a->media < MEDIA_COUNT ? cape_profile_media(media_names[a->media], strlen(media_names[a->media])) : CAPE_PROFILE_NONE;
-        if(k == CAPE_PROFILE_NONE)
-            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a Media action this keyboard has no key for");
+        // iCUE leaves out a Media action of no key
+        if(k == CAPE_PROFILE_NONE){
+            out->kind = CAPE_BIND_NATIVE;
+            return CAPE_OK;
+        }
         out->kind = CAPE_BIND_REMAP;
         out->dst = (uint8_t)k;
         return CAPE_OK;
     }
     case CAPE_PROFILE_REMAP:
-        if(a->program_path.len)
-            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a remap that starts a program");
-        if(a->holding_enabled){
-            if((a->holding_type != CAPE_PROFILE_HOLD_ON_PRESS && a->holding_type != CAPE_PROFILE_HOLD_TOGGLE) || !a->key_name.len || a->nstroke)
-                return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "an 'Imitate holding key' while pressed, or not of one key");
+        // a program to start is the software's: iCUE writes the remap without it. A shortcut comes before the key; 'Imitate
+        // holding key' while pressed, which iCUE has no file for, is the plain remap of the key
+        if(a->holding_enabled && !a->nstroke && a->key_name.len
+           && (a->holding_type == CAPE_PROFILE_HOLD_ON_PRESS || a->holding_type == CAPE_PROFILE_HOLD_TOGGLE)){
             uint8_t k;
             if(event_key(&a->key_name, &k, why) != CAPE_OK)
                 return CAPE_COMPILE_E_UNCOMPILABLE;
@@ -372,8 +330,6 @@ int cape_compile_action(const cape_profile_action* a, cape_binding_action* out, 
             out->kind = CAPE_BIND_NATIVE;
             return CAPE_OK;
         }
-        if(a->key_name.len)
-            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a remap with both a key and a shortcut");
         rc = shortcut_events(a, &v, why);
         subtype = CAPE_MACRO_SHORTCUT;
         break;
@@ -415,12 +371,13 @@ int cape_compile_bindings(const cape_profile_profile* p, cape_binding_model* out
     cape_binding_init(out);
     if(!p)
         return CAPE_E_ARG;
-    if(p->disable_encryption || p->disable_touchpad || !p->swap_fkeys)
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "Win Lock options of another device");
-    if(p->preset_active || memcmp(p->active_preset.b, (const uint8_t[16]){ 0 }, 16) || p->hw_actions_types)
+    // the touchpad and the swap of the F keys are not options of this keyboard: iCUE writes nothing of them
+    // with presets active iCUE writes their actions instead; an inactive preset and the supported types change nothing
+    if(p->preset_active)
         return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "presets of actions");
     out->winlock = (uint8_t)((p->disable_win ? CAPE_WINLOCK_WINKEY : 0) | (p->disable_alt_tab ? CAPE_WINLOCK_ALT_TAB : 0)
-                             | (p->disable_alt_f4 ? CAPE_WINLOCK_ALT_F4 : 0) | (p->disable_shift_tab ? CAPE_WINLOCK_SHIFT_TAB : 0));
+                             | (p->disable_alt_f4 ? CAPE_WINLOCK_ALT_F4 : 0) | (p->disable_shift_tab ? CAPE_WINLOCK_SHIFT_TAB : 0)
+                             | (p->disable_encryption ? CAPE_WINLOCK_ENCRYPTION : 0));
     uint8_t taken[CAPE_BIND_K95_KEYS] = { 0 };
     for(uint32_t i = 0; i < p->nbindings; i++){
         const cape_profile_binding* b = &p->bindings[i];
@@ -492,8 +449,11 @@ static int is_predefined(cape_profile_effect_kind k){
     return k != CAPE_PROFILE_STATIC && k != CAPE_PROFILE_SOLID && k != CAPE_PROFILE_GRADIENT && k != CAPE_PROFILE_WAVE && k != CAPE_PROFILE_RIPPLE;
 }
 
-// The cells of a layer on a layout, in iCUE's order
-static int layer_cells(const cape_profile_layer* l, int layout, uint8_t cells[CAPE_PROFILE_LAYER_MAX], unsigned* n, char* why){
+// The cells of a layer on a layout, in iCUE's order. The lights of the indicators have no cell: iCUE leaves them out of the cells
+// and counts them in the colours (*indicators)
+static int layer_cells(const cape_profile_layer* l, int layout, uint8_t cells[CAPE_PROFILE_LAYER_MAX], unsigned* n, unsigned* indicators,
+                       char* why){
+    *indicators = 0;
     if(l->option == CAPE_PROFILE_OPTION_ALL){
         *n = cape_profile_layout_all(layout, cells, NULL);
         return CAPE_OK;
@@ -509,8 +469,10 @@ static int layer_cells(const cape_profile_layer* l, int layout, uint8_t cells[CA
         const int cell = cape_profile_light(name->p, name->len, layout, &order);
         if(cell == CAPE_PROFILE_NONE){
             const int led = cape_profile_led(name->p, name->len);
-            if(led == CAPE_LED_PROFILE || led == CAPE_LED_BRIGHTNESS || led == CAPE_LED_WINLOCK)
-                return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "the light \"%s\" in a layer: its color is an indicator's", str(name));
+            if(led == CAPE_LED_PROFILE || led == CAPE_LED_BRIGHTNESS || led == CAPE_LED_WINLOCK){
+                ++*indicators;
+                continue;
+            }
             for(int other = CAPE_PROFILE_LAYOUT_ANSI; other <= CAPE_PROFILE_LAYOUT_KS; other++)
                 if(cape_profile_light(name->p, name->len, other, NULL) != CAPE_PROFILE_NONE)
                     return fail(why, CAPE_COMPILE_E_NOCELL, "the light \"%s\" is not one of layout %d", str(name), layout);
@@ -687,8 +649,7 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
     if(!p)
         return CAPE_E_ARG;
     if(p->nlayers && !p->layers) return CAPE_E_ARG;
-    if(!p->side_lighting)
-        return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "the side lighting turned off");
+    // the side lighting is not an option of this keyboard in iCUE, which writes nothing of it
     if(p->nlayers > CAPE_LAYERS_MAX)
         return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "%u layers: the keyboard holds %d", (unsigned)p->nlayers, CAPE_LAYERS_MAX);
     unsigned all_colours = 0;
@@ -713,8 +674,7 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
         const cape_profile_effect* e = &l->effect;
         if(l->play_option != CAPE_PROFILE_PLAY_STANDARD)
             return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "layer %u played from a key", f);
-        if(e->brightness != 10)
-            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "layer %u at another brightness", f);
+        // the brightness of a layer is iCUE's own drawing: the hardware files do not hold it
         if(is_predefined(e->kind)){
             if(p->nlayers != 1 || l->option != CAPE_PROFILE_OPTION_ALL)
                 return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a predefined effect with other layers, or not on all keys");
@@ -731,8 +691,8 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
             continue;
         }
         uint8_t cells[CAPE_PROFILE_LAYER_MAX];
-        unsigned n = 0;
-        int rc = layer_cells(l, layout, cells, &n, why);
+        unsigned n = 0, indicators = 0;
+        int rc = layer_cells(l, layout, cells, &n, &indicators, why);
         if(rc != CAPE_OK)
             return rc;
         if(e->ntransitions && !e->transitions) return CAPE_E_ARG;
@@ -744,6 +704,9 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
                 return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "layer %u: its colors are not in order of time", f);
         }
         if(e->kind != CAPE_PROFILE_STATIC){
+            // where iCUE puts the origin of an effect with the light of an indicator is not known
+            if(indicators)
+                return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "layer %u: an effect on the light of an indicator", f);
             out->effects = 1;
             out->count += 2;
             out->bytes += CAPE_LIGHT_DESC_CUSTOM + 4 + n;
@@ -756,9 +719,7 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
         }
         if(e->ntransitions != 1)
             return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a static layer of %u colors", (unsigned)e->ntransitions);
-        if(!l->start_with_profile || l->start_on_key_press || l->stop_on_key_press || l->stop_on_key_release
-           || (l->stop_after_times != -1 && l->stop_after_times != 0))
-            return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a static layer that starts or stops on a key");
+        // the descriptor of a static layer is constant: when it starts or stops is not in the files
         if(e->opacity > 255)
             return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "a static layer of opacity %u", (unsigned)e->opacity);
         out->count += 3;
@@ -775,7 +736,7 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
             memset(colours, 0, sizeof(colours));
             uint8_t rgb[3];
             rgb_of(&e->transitions[0].colour, rgb);
-            const unsigned ncolours = l->option == CAPE_PROFILE_OPTION_ALL ? all_colours : n;
+            const unsigned ncolours = l->option == CAPE_PROFILE_OPTION_ALL ? all_colours : n + indicators;
             for(unsigned i = 0; i < ncolours; i++)
                 colours[i] = (cape_rgba){ rgb[0], rgb[1], rgb[2], (uint8_t)e->opacity };
             rc = set_file(&file[2], f, 'r', cape_colors_build(colours, file[2].data, sizeof(file[2].data)));
@@ -802,6 +763,31 @@ int cape_compile_lighting_build(const cape_profile_profile* p, int layout, cape_
 static const cape_profile_colour new_m1 = { { 1, 0.47451, 0, 1 }, 0 };
 static const cape_profile_colour new_m2 = { { 0.686275, 0.0980392, 0, 1 }, 0 };
 static const cape_profile_colour new_m3 = { { 0.686275, 0, 0.6, 1 }, 0 };
+
+int cape_compile_shape(const cape_profile_action* a, char** out){
+    *out = NULL;
+    if(a->kind == CAPE_PROFILE_REMAP && a->key_name.len && !a->nstroke && !a->holding_enabled && a->remap_group <= 0xff){
+        *out = malloc((size_t)a->key_name.len + 5);
+        if(!*out) return CAPE_E_CAP;
+        snprintf(*out, (size_t)a->key_name.len + 5, "R%02x:%.*s", a->remap_group, (int)a->key_name.len, a->key_name.p);
+    } else if(a->kind == CAPE_PROFILE_MACRO){
+        *out = malloc((size_t)a->nevents * 5 + 2);
+        if(!*out) return CAPE_E_CAP;
+        char* p = *out;
+        *p++ = 'M';
+        for(uint32_t i = 0; i < a->nevents; ++i){
+            const cape_profile_event* e = &a->events[i];
+            if(e->kind == CAPE_PROFILE_DELAY_EVENT) *p++ = 'd';
+            else if(e->nkeys <= 0xffff){
+                const char kind = e->sub == CAPE_PROFILE_SUB_PRESS ? 'p' : e->sub == CAPE_PROFILE_SUB_RELEASE ? 'r' : 's';
+                snprintf(p, 6, "%c%04x", kind, e->nkeys);
+                p += 5;
+            } else { free(*out); *out = NULL; return CAPE_E_RANGE; }
+        }
+        *p = 0;
+    }
+    return CAPE_OK;
+}
 
 // The tabs of iCUE's Remap an action was chosen in (remapGroup)
 enum { GROUP_KEYBOARD = 0, GROUP_MOUSE = 6, GROUP_KEYSTROKE = 7, GROUP_LANGUAGE = 9 };
@@ -1243,12 +1229,152 @@ static int invert(const cape_binding_action* a, int convert, int* converted, cap
     return rc;
 }
 
+static int shape_hex(const char* p, unsigned n, unsigned* value){
+    *value = 0;
+    for(unsigned i = 0; i < n; ++i){
+        const int d = p[i] >= '0' && p[i] <= '9' ? p[i] - '0' : p[i] >= 'a' && p[i] <= 'f' ? p[i] - 'a' + 10 : -1;
+        if(d < 0) return 0;
+        *value = (*value << 4) | (unsigned)d;
+    }
+    return 1;
+}
+
+// Restore the XML representation only when every event still matches the executable file.
+static int apply_shape(cape_profile_action* a, const cape_binding_action* files, const char* shape){
+    char* current = NULL;
+    int rc = cape_compile_shape(a, &current);
+    if(rc != CAPE_OK) return rc;
+    const int same = current && !strcmp(current, shape);
+    free(current);
+    if(same) return CAPE_OK;
+    const size_t len = strlen(shape);
+    if(len >= 5 && shape[0] == 'R' && shape[3] == ':'){
+        unsigned group;
+        const int key = cape_profile_key(shape + 4, len - 4);
+        if(a->kind != CAPE_PROFILE_REMAP || files->kind != CAPE_BIND_REMAP || !shape_hex(shape + 1, 2, &group)
+           || (group != GROUP_KEYBOARD && group != GROUP_MOUSE && group != GROUP_LANGUAGE) || key < 0 || key != files->dst)
+            return CAPE_COMPILE_E_UNCOMPILABLE;
+        cape_profile_text name;
+        if(text_set(&name, shape + 4, len - 4) != CAPE_OK) return CAPE_E_CAP;
+        free(a->key_name.p);
+        a->key_name = name;
+        a->remap_group = (uint8_t)group;
+        return CAPE_OK;
+    }
+    if(len < 2 || shape[0] != 'M' || a->kind != CAPE_PROFILE_MACRO || files->kind != CAPE_BIND_MACRO)
+        return CAPE_COMPILE_E_UNCOMPILABLE;
+    cape_profile_action made = { 0 };
+    made.events = calloc(files->nevents ? files->nevents : 1, sizeof(*made.events));
+    if(!made.events) return CAPE_E_CAP;
+    unsigned pos = 0;
+    int last_key = 0;
+    for(size_t at = 1; at < len && rc == CAPE_OK;){
+        if(made.nevents >= files->nevents){ rc = CAPE_COMPILE_E_UNCOMPILABLE; break; }
+        cape_profile_event* e = &made.events[made.nevents++];
+        const char kind = shape[at++];
+        if(kind == 'd'){
+            if(pos >= files->nevents){ rc = CAPE_COMPILE_E_UNCOMPILABLE; break; }
+            const cape_event raw = files->events[pos++];
+            const int type = cape_ev_kind(raw);
+            e->kind = CAPE_PROFILE_DELAY_EVENT;
+            if(type == CAPE_EV_RANDOM){
+                e->random = 1; e->delay_min = cape_ev_random_min(raw); e->delay_max = cape_ev_random_max(raw);
+            } else if(type == CAPE_EV_DELAY || type == CAPE_EV_LONG) e->delay = cape_ev_delay_ms(raw);
+            else rc = CAPE_COMPILE_E_UNCOMPILABLE;
+            last_key = 0;
+            continue;
+        }
+        unsigned n;
+        if((kind != 'p' && kind != 'r' && kind != 's') || at + 4 > len || !shape_hex(shape + at, 4, &n) || !n
+           || n > files->nevents){ rc = CAPE_COMPILE_E_UNCOMPILABLE; break; }
+        at += 4;
+        e->kind = CAPE_PROFILE_KEY_EVENT;
+        e->sub = kind == 'p' ? CAPE_PROFILE_SUB_PRESS : kind == 'r' ? CAPE_PROFILE_SUB_RELEASE : CAPE_PROFILE_SUB_STROKE;
+        e->keys = calloc(n, sizeof(*e->keys));
+        if(!e->keys){ rc = CAPE_E_CAP; break; }
+        e->nkeys = n;
+        for(unsigned j = 0; j < n * (kind == 's' ? 2u : 1u); ++j){
+            if(last_key){
+                if(pos >= files->nevents || cape_ev_kind(files->events[pos]) != CAPE_EV_DELAY || cape_ev_delay_ms(files->events[pos++])){
+                    rc = CAPE_COMPILE_E_UNCOMPILABLE; break;
+                }
+            }
+            const int expected = kind == 'r' || (kind == 's' && j >= n) ? CAPE_EV_RELEASE : CAPE_EV_PRESS;
+            if(pos >= files->nevents || cape_ev_kind(files->events[pos]) != expected){ rc = CAPE_COMPILE_E_UNCOMPILABLE; break; }
+            const uint8_t key = cape_ev_key(files->events[pos++]);
+            if(j < n) rc = key_name_set(&e->keys[j], key);
+            else if(cape_profile_key(e->keys[j - n].p, e->keys[j - n].len) != key) rc = CAPE_COMPILE_E_UNCOMPILABLE;
+            if(rc != CAPE_OK) break;
+            last_key = 1;
+        }
+    }
+    if(rc == CAPE_OK && pos != files->nevents) rc = CAPE_COMPILE_E_UNCOMPILABLE;
+    if(rc == CAPE_OK){
+        for(uint32_t i = 0; i < a->nevents; ++i) texts_release(a->events[i].keys, a->events[i].nkeys);
+        free(a->events);
+        a->events = made.events; a->nevents = made.nevents;
+        made.events = NULL; made.nevents = 0;
+        rc = exact(compiles_to(a, files, 0));
+    }
+    action_release(&made);
+    return rc;
+}
+
+// The values of the base the files do not hold (iCUE does not write them): an action edited keeps them. Kept only where the action
+// still compiles to the files; 1, 0 or CAPE_E_CAP
+static int keep_unwritten(cape_profile_action* a, const cape_binding_action* files, const cape_profile_action* b){
+    cape_profile_action was = *a;
+    cape_profile_text sound, program;
+    if(text_set(&sound, str(&b->sound_path), b->sound_path.len) != CAPE_OK)
+        return CAPE_E_CAP;
+    if(text_set(&program, str(&b->program_path), b->program_path.len) != CAPE_OK){
+        free(sound.p);
+        return CAPE_E_CAP;
+    }
+    a->sound_path = sound;
+    a->lighting = b->lighting;
+    a->retain_original = b->retain_original;
+    a->terminate_on_second = b->terminate_on_second;
+    if(a->kind == CAPE_PROFILE_MACRO){
+        a->termination = b->termination;
+        a->high_priority = b->high_priority;
+    }
+    if(a->kind == CAPE_PROFILE_REMAP)
+        a->program_path = program;
+    else
+        free(program.p);
+    // how an action repeats is in the files of a Macro that repeats only
+    if(a->kind != CAPE_PROFILE_MACRO || (a->repeat_mode == CAPE_PROFILE_REPEAT_NO && b->repeat_mode == CAPE_PROFILE_REPEAT_NO)){
+        a->repeat_mode = b->repeat_mode;
+        a->repeat_count = b->repeat_count;
+        a->repeat_delay = b->repeat_delay;
+        a->delay_mode = b->delay_mode;
+        a->random_delay_from = b->random_delay_from;
+        a->random_delay_to = b->random_delay_to;
+    }
+    const int same = compiles_to(a, files, 0);
+    if(same == 1){
+        free(was.sound_path.p);
+        if(a->kind == CAPE_PROFILE_REMAP)
+            free(was.program_path.p);
+        return 1;
+    }
+    free(a->sound_path.p);
+    if(a->kind == CAPE_PROFILE_REMAP)
+        free(a->program_path.p);
+    *a = was;
+    return same;
+}
+
 // Rule 2 with an action of the base of the same kind on the key: its name and identity, and its values where they give the same
 static int keep_from_base(cape_profile_action* a, const cape_binding_action* files, const cape_profile_action* b){
     free(a->name.p);
     if(text_set(&a->name, str(&b->name), b->name.len) != CAPE_OK)
         return CAPE_E_CAP;
     a->id = b->id;
+    const int unwritten = keep_unwritten(a, files, b);
+    if(unwritten < 0)
+        return unwritten;
     a->restart_on_second = b->restart_on_second;
     a->sniper_mode = b->sniper_mode;
     const uint8_t hint = a->exec_hint;
@@ -1375,6 +1501,16 @@ static int import_in_order(const cape_binding_model* bm, const cape_profile_prof
         }
         if(rc != CAPE_OK)
             return rc;
+    }
+    // Explicit editor metadata wins even when the executable events did not change.
+    for(unsigned k = 0; o->shapes && k < CAPE_BIND_K95_KEYS; ++k){
+        if(!o->shapes[k]) continue;
+        cape_profile_action* a = NULL;
+        for(uint32_t j = 0; j < out->nbindings; ++j)
+            if(key_of(&out->bindings[j].key) == (int)k) a = &out->bindings[j].action;
+        if(!a) return fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "model metadata without an action");
+        const int rc = apply_shape(a, &bm->key[k], o->shapes[k]);
+        if(rc != CAPE_OK) return fail(why, rc, "model metadata does not match the action of key %u", k);
     }
     // 'Imitate holding key' with an interval the file cannot say
     for(size_t i = 0; i < o->nhold; i++){
@@ -1610,7 +1746,6 @@ int cape_compile_import(const cape_slot_files* files, const cape_profile_profile
         out->m2 = base->m2;
         out->m3 = base->m3;
         out->side_lighting = base->side_lighting;
-        out->disable_encryption = base->disable_encryption;
         out->disable_touchpad = base->disable_touchpad;
         out->swap_fkeys = base->swap_fkeys;
         out->hw_actions_types = base->hw_actions_types;
@@ -1628,12 +1763,13 @@ int cape_compile_import(const cape_slot_files* files, const cape_profile_profile
     if(rc == CAPE_OK && bm.state != CAPE_BIND_OK)
         rc = fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "bindings iCUE does not write: %s", bm.reason);
     else if(rc == CAPE_OK && (bm.winlock & ~CAPE_WINLOCK_KNOWN))
-        rc = fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "Win Lock options %02x, of which iCUE has the low four", bm.winlock);
+        rc = fail(why, CAPE_COMPILE_E_UNCOMPILABLE, "Win Lock options %02x, of which iCUE has the low five", bm.winlock);
     if(rc == CAPE_OK){
         out->disable_win = (bm.winlock & CAPE_WINLOCK_WINKEY) != 0;
         out->disable_alt_tab = (bm.winlock & CAPE_WINLOCK_ALT_TAB) != 0;
         out->disable_alt_f4 = (bm.winlock & CAPE_WINLOCK_ALT_F4) != 0;
         out->disable_shift_tab = (bm.winlock & CAPE_WINLOCK_SHIFT_TAB) != 0;
+        out->disable_encryption = (bm.winlock & CAPE_WINLOCK_ENCRYPTION) != 0;
         rc = import_bindings(&bm, base, opts, out, why);
     }
     cape_binding_free(&bm);

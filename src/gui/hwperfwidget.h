@@ -48,6 +48,7 @@ private:
     QPushButton* restore;
     QPushButton* copy;
     bool filling = false;
+    uint8_t keptWinlock = 0;   // the Win Lock bits the slot has and the tab has no option for
     void changed();
 };
 

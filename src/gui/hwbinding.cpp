@@ -1,4 +1,8 @@
 #include "hwbinding.h"
+#include "k95pkeytable.h"
+extern "C" {
+#include "../daemon/cape_names.h"
+}
 
 #include <cstdio>
 
@@ -148,8 +152,34 @@ bool event_known(const Event& e){
 
 } // namespace
 
+// Actions created from executable events use the canonical XML representation until explicitly edited.
+static std::string modelShape(const Action& a){
+    if(!a.shape.empty()) return a.shape;
+    if(a.kind == Action::REMAP){
+        if(K95PKeyTable::mediaKey(a.dst)) return {};
+        const char* name = cape_profile_key_name(a.dst);
+        if(!name) return {};
+        const unsigned group = a.dst >= K95PKeyTable::MOUSE_FIRST ? 6u :
+            K95PKeyTable::languageKey(a.dst) && !K95PKeyTable::keyboardKey(a.dst) ? 9u : 0u;
+        char prefix[5]; std::snprintf(prefix, sizeof(prefix), "R%02x:", group);
+        return std::string(prefix) + name;
+    }
+    if(a.kind != Action::MACRO || a.subtype != SUBTYPE_MACRO) return {};
+    std::string out = "M";
+    for(size_t i = 0; i < a.events.size(); ++i){
+        const auto kind = eventKind(a.events[i]);
+        if(kind == EV_PRESS) out += "p0001";
+        else if(kind == EV_RELEASE) out += "r0001";
+        else if(kind == EV_DELAY && delayMs(a.events[i]) == 0 && i && i + 1 < a.events.size() &&
+                (eventKind(a.events[i - 1]) == EV_PRESS || eventKind(a.events[i - 1]) == EV_RELEASE) &&
+                (eventKind(a.events[i + 1]) == EV_PRESS || eventKind(a.events[i + 1]) == EV_RELEASE)) continue;
+        else out += 'd';
+    }
+    return out;
+}
+
 bool Action::sameAs(const Action& o) const {
-    if(kind != o.kind) return false;
+    if(kind != o.kind || modelShape(*this) != modelShape(o)) return false;
     switch(kind){
     case NATIVE: return true;
     case REMAP: return dst == o.dst;
@@ -499,6 +529,15 @@ static bool readRecord(const std::vector<std::string>& w, Record& out, std::stri
             }
         }
     }
+    last = -1;
+    while(next("bs:")){
+        const size_t colon = w[i].find(':', 3);
+        uint32_t key;
+        if(colon == std::string::npos || !hex_exact(w[i].substr(3, colon - 3), 2, key) || key >= KEYS || int(key) <= last
+           || out.keys[key].kind == Action::NATIVE){ err = "invalid binding model key"; return false; }
+        last = int(key);
+        if(!text_words(w, i, w[i].substr(0, colon + 1), SHAPE_WORDS, out.keys[key].shape, err) || out.keys[key].shape.empty()) return false;
+    }
     if(i + 1 != w.size() || w[i] != "end"){ err = "the record does not end where it should"; return false; }
     return true;
 }
@@ -566,6 +605,18 @@ std::vector<std::string> stageWords(const Stage& s){
                 if(a.imitateMs <= IMITATE_FILE_MAX || a.imitateMs > IMITATE_MAX || !a.longestImitate()) return std::vector<std::string>();
                 std::snprintf(buf, sizeof(buf), ":%02x:%lu", k, a.imitateMs);
                 w.push_back("im:" + x + buf);
+            }
+        }
+    }
+    if(!s.keepBindings){
+        for(unsigned k = 0; k < KEYS; ++k){
+            if(s.keys[k].shape.empty()) continue;
+            if(s.keys[k].kind == Action::NATIVE) return {};
+            const std::vector<std::string> pieces = cutText(s.keys[k].shape);
+            if(pieces.size() > SHAPE_WORDS) return {};
+            for(size_t p = 0; p < pieces.size(); ++p){
+                std::snprintf(buf, sizeof(buf), ":%02x:%u/%u:", k, unsigned(p + 1), unsigned(pieces.size()));
+                w.push_back("bs:" + x + buf + encode(pieces[p]));
             }
         }
     }
